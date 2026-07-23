@@ -1,0 +1,97 @@
+# Parameters for autodrive_perception/lane_detector_node.
+# Works on the raw (perspective) camera feed -- see LaneDetector docstring
+# for why collinearity-based clustering is used instead of BEV column-grouping.
+# Pixel-unit values below are scaled for the 1920x1080 capture resolution
+# (see camera.yaml) -- halve/double them together if that resolution changes.
+lane_detector_node:
+  ros__parameters:
+    adaptive_block_size: 151  # local neighborhood (px, must be odd) a pixel's brightness is
+                                # compared against -- must span wider than a lane line's own
+                                # width, otherwise the line dominates its own neighborhood
+                                # average and stops looking "brighter than its surroundings".
+                                # Scaled for 1920x1080; halve/double with capture resolution.
+    adaptive_c: -15.0         # how many gray levels brighter than the local neighborhood
+                                # average a pixel must be to count as line paint (passed
+                                # straight to cv2.adaptiveThreshold's C, so more negative =
+                                # stricter/fewer pixels pass). Replaces a single fixed global
+                                # cutoff, which let uneven overhead lighting (glare, a person
+                                # standing on the floor) mask in as if it were paint since it
+                                # could still cross one fixed brightness number.
+    blur_kernel_size: 5       # Gaussian blur kernel (odd, 0/1 disables) applied before
+                                # thresholding to smooth out floor texture/scratch noise
+    hough_threshold: 50       # HoughLinesP accumulator vote threshold -- raised from 30 to
+                                # cut down near-duplicate overlapping segments Hough emits
+                                # along the same thick stroke (see _cluster_collinear), which
+                                # is what actually drives clustering's per-frame CPU cost
+    hough_min_line_length: 40 # drop segments shorter than this (noise) -- raised from 20
+                                # alongside hough_threshold, same reason
+    hough_max_line_gap: 8     # kept small so dash gaps are NOT bridged into a false solid
+    hough_scale: 0.6          # run HoughLinesP on the mask downscaled by this factor (the
+                                # dominant cost in detect()); coordinates are scaled back up.
+                                # Lower is faster but can fragment curved solid lines into
+                                # "dashed" -- 0.6 was measured to cut CPU ~25% with no accuracy
+                                # loss on straight track sections; re-verify on curves before
+                                # going lower.
+    angle_tol_deg: 8.0        # max line-angle difference to treat two segments as collinear
+    collinear_dist_tol_px: 25.0  # max perpendicular offset to treat two segments as collinear
+    max_segments: 500          # cap on Hough segments considered per frame (longest kept),
+                                # protects against O(n^2) clustering blowing up on noisy frames
+    roi_top_ratio: 0.45        # ignore rows above this fraction of image height (ceiling/walls)
+    roi_top_width_ratio: 0.5   # ROI trapezoid width at the top/far edge, as a fraction of
+                                # image width (centered) -- narrower since the floor view
+                                # narrows toward the vanishing point; the rest is wall/background
+    roi_bottom_width_ratio: 1.0  # ROI trapezoid width at the bottom/near edge (full width)
+    filter_outside_track_boundary: true  # drop detections outside the leftmost/rightmost
+                                # boundary candidate (assumed to be the track's edge lines);
+                                # single-frame only, needs >=2 boundary candidates
+    min_boundary_span_ratio: 0.3  # a detection must span at least this fraction of
+                                # the ROI height to count as a boundary candidate (excludes
+                                # short segments like the car body or reflections)
+    min_line_aspect_ratio: 3.0  # a detected cluster must be at least this elongated
+                                # (minAreaRect long/short side ratio) to count as a lane line;
+                                # rejects wall corners/doorframes/other non-line white objects
+    min_line_length_px: 60.0   # a detected cluster's long side must be at least this many
+                                # pixels; rejects short incidental edge fragments (e.g. a
+                                # circle's chord is thin/"line-like" but usually short)
+    corner_tol_px: 30.0        # two detections' endpoints within this many pixels count as
+                                # meeting at a shared corner -- a closed loop of >=3 such
+                                # corners (e.g. a parking-space pictogram painted on the
+                                # track) is dropped entirely, since a real lane line's ends
+                                # never connect to anything else
+    # Temporal smoothing (see autodrive_perception/core/lane_tracker.py): a
+    # line must match an existing track for this many frames before it's
+    # shown, and stays shown for up to this many consecutive missed frames
+    # before being dropped -- kills single-frame flicker at the cost of a
+    # few frames of extra latency before a new line first appears.
+    smoothing_min_confirm_frames: 3
+    smoothing_max_missed_frames: 3
+    # Kalman tracking (autodrive_perception/core/lane_tracker.py): each line
+    # is tracked by its x-intercepts at the ROI's near/far reference rows.
+    kalman_process_noise: 4.0   # expected per-frame acceleration variance of a
+                                # line's intercepts (px^2) -- higher tracks fast
+                                # position changes (sharp curves) more responsively
+                                # but smooths/rejects outliers less strongly
+    kalman_measurement_noise: 25.0  # expected per-frame detection noise variance
+                                # (px^2) of a single measured intercept
+    kalman_initial_velocity_variance: 400.0  # initial uncertainty (px^2) for a
+                                # newly-created track's velocity, which is
+                                # unknown until it has been matched at least twice
+    kalman_gating_mahalanobis: 3.0  # reject a candidate match whose distance from
+                                # a track's predicted position, in standard
+                                # deviations, exceeds this -- this is what stops an
+                                # established track from being hijacked by an
+                                # unrelated one-off marking (e.g. a parking-space
+                                # divider) that happens to appear nearby
+    # The track layout is a fixed number of parallel, evenly-spaced boundary/
+    # divider lines. Something that persists long enough to become its own
+    # confirmed track (e.g. a parking-space divider between the real lines)
+    # but doesn't fit that pattern gets dropped even though nothing about its
+    # own shape/tracking history says it's not a real line.
+    parallel_angle_tol_deg: 10.0  # max angle difference (deg) to treat two
+                                # tracked lines as parallel/part of the same group
+    spacing_tol_ratio: 0.35    # a run of lines is "evenly spaced" if each gap is
+                                # within this fraction of the run's own running
+                                # mean gap so far (adaptive, not one fixed width)
+    min_consistent_group_size: 2  # need at least this many mutually parallel,
+                                # evenly-spaced lines before the spacing check
+                                # applies at all; below it, everything is kept

@@ -1,0 +1,13 @@
+# Placeholder parameters for autodrive_safety.
+# TODO: command_arbiter_node has no tunable parameters yet.
+command_arbiter_node:
+  ros__parameters: {}
+
+watchdog_node:
+  ros__parameters:
+    # TODO: tune these placeholder timeouts once real timing is characterized.
+    camera_timeout_sec: 1.0
+    localization_pose_timeout_sec: 1.0
+    controller_command_timeout_sec: 0.5
+    steering_feedback_timeout_sec: 0.5
+    check_rate_hz: 10.0

@@ -1,0 +1,23 @@
+# Parameters for autodrive_sensors/camera_node, run as two separate node
+# instances (camera_front_node, camera_rear_node) -- one per physical camera.
+camera_front_node:
+  ros__parameters:
+    camera_name: "front"
+    device: "/dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920-video-index0"  # C920 webcam
+    frame_id: "camera_front_optical_frame"
+    publish_rate_hz: 30.0
+    image_width: 1920
+    image_height: 1080
+    camera_info_file: "c920_1920x1080.yaml"
+    publish_mono: true   # lane_detector_node subscribes to this instead of the
+                          # color topic -- see camera_node.py's class docstring
+
+camera_rear_node:
+  ros__parameters:
+    camera_name: "rear"
+    device: ""    # TODO: confirm the real rear camera device (by-id path), do not guess
+    frame_id: "camera_rear_optical_frame"
+    publish_rate_hz: 30.0
+    image_width: 1920
+    image_height: 1080
+    camera_info_file: ""    # TODO: rear camera calibration file, once captured/computed

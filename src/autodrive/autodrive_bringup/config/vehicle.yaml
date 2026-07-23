@@ -1,0 +1,27 @@
+# Placeholder parameters for autodrive_vehicle.
+# TODO: confirm the real serial port and baud rate before deploying.
+#
+# steer_pulse_duration_ms is duplicated between the two node sections below
+# on purpose -- /vehicle/steering_pwm (std_msgs/Float32) only carries a PWM
+# value, not a duration, so both nodes read the same config value instead of
+# a custom message type. Keep them equal if you change one.
+arduino_bridge_node:
+  ros__parameters:
+    serial_port: ""    # TODO: do not guess a /dev/ttyACMx or COM port
+    baudrate: 115200
+    speed_to_pwm_gain: 0.0   # TODO: (m/s) -> throttle PWM, until the drive
+                              # motor is characterized against real speed
+    max_throttle_pwm: 0      # TODO: safe drive PWM ceiling, once known
+    steer_pulse_duration_ms: 0  # TODO: must match steering_pid_node below
+
+steering_pid_node:
+  ros__parameters:
+    # TODO: unused until a real steering feedback sensor is installed --
+    # see steering_pid_node.py. Tune once the sensor exists.
+    kp: 0.0
+    ki: 0.0
+    kd: 0.0
+    # Open-loop angle -> steering pulse mapping used until then.
+    angle_to_pwm_gain: 0.0   # TODO: (rad) -> steer PWM, once motor is characterized
+    max_steer_pwm: 0         # TODO: safe steering PWM ceiling, once known
+    steer_pulse_duration_ms: 0  # TODO: must match arduino_bridge_node above

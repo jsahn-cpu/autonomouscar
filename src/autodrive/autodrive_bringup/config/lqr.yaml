@@ -1,0 +1,7 @@
+# Placeholder LQR weights for autodrive_control/lqr_controller_node.
+# TODO: tune Q/R once the linear vehicle model and gain computation are implemented.
+lqr_controller_node:
+  ros__parameters:
+    q_e_y: 1.0
+    q_e_psi: 1.0
+    r_delta: 1.0

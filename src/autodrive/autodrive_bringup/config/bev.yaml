@@ -1,0 +1,12 @@
+# Placeholder parameters for autodrive_perception (bev_node, local_map_node).
+# TODO: tune resolution/grid size once the BEV transform is implemented.
+bev_node:
+  ros__parameters:
+    output_frame_id: "base_link"
+
+local_map_node:
+  ros__parameters:
+    resolution: 0.05
+    width_cells: 200
+    height_cells: 200
+    frame_id: "base_link"

@@ -1,0 +1,9 @@
+# Placeholder parameters for autodrive_localization.
+# TODO: point global_map_path at a real global map once one exists.
+global_map_matcher_node:
+  ros__parameters:
+    global_map_path: ""
+
+ekf_localizer_node:
+  ros__parameters:
+    wheelbase: 0.545
