@@ -16,7 +16,7 @@
 |---|---|---|
 | `autodrive_description` | ament_cmake | 차량 URDF/Xacro, TF 구조 (`base_link`, `camera_front_link`, `camera_front_optical_frame`) |
 | `autodrive_sensors` | ament_python | 카메라/조향 피드백/Arduino 센서 등 하드웨어 입력 전용 (인지·위치추정 로직 없음) |
-| `autodrive_perception` | ament_python | 전방 카메라 영상 → BEV 변환, Local Map 생성 (장애물/신호등/주차 인식 없음) |
+| `autodrive_perception` | ament_python | 전방 카메라 영상에서 차선/마킹 인식 + 추종할 목표 경로(레퍼런스 경로, 이미지 좌표계) 생성 — `lane_detector_node`가 실제로 동작하는 부분(장애물/신호등/주차 인식 없음). `bev_node`/`local_map_node`(BEV 변환, Local Map 생성)는 아직 미구현 스켈레톤으로 남아있고, 현재는 이 방향 대신 카메라→차선 인식→목표 경로의 직접 경로로 방향을 잡음 (아래 3절 참고) |
 | `autodrive_localization` | ament_python | Global Map Matching + EKF 기반 위치추정 ([X, Y, yaw]) |
 | `autodrive_planning` | ament_python | 사전 저장된 Reference Path 발행 (A*, Hybrid A*, RRT, Mission Planner 없음) |
 | `autodrive_control` | ament_python | Tracking Error 계산 + LQR 조향 제어 (Pure Pursuit/RL로 확장 가능한 구조) |
@@ -27,6 +27,20 @@
 | `autodrive_missions` | ament_python | 장애물 회피 / 신호등 / 주차 — 현재는 완전히 빈 폴더 (Future implementation) |
 
 ## 3. 전체 데이터 흐름
+
+**현재 실제로 동작하는 경로 (1차 목표: 카메라 기반 차선 인식/추종)**
+
+```
+Camera
+  -> Lane Detection + Tracking (lane_detector_node: LaneDetector, LaneTracker)
+  -> Reference Path (image-space, /perception/lane_reference — ReferenceLaneBuilder)
+  -> [아직 미연결] 저수준 조향
+```
+
+`/perception/lane_reference`는 아직 아무 노드도 구독하지 않는다 — 저수준 조향(`autodrive_vehicle`)과
+연결하는 것이 다음 단계다. 지금은 카메라 → 차선 인식 → 목표 경로 생성까지만 실제로 동작한다.
+
+**장기 비전 (아래 대부분 미구현 스켈레톤 — 현재는 이 방향 대신 위 단순 경로로 진행 중)**
 
 ```
 Camera
@@ -43,6 +57,10 @@ Camera
   -> Vehicle Interface
   -> Arduino Mega
 ```
+
+두 경로 다 최종적으로는 `/safety/command`를 거쳐 Arduino로 가는 구조는 같으나,
+전자는 EKF/Global Map/LQR 같은 전역 위치추정·최적제어 없이 카메라 영상에서 곧바로
+목표 경로를 뽑아 따라가는 훨씬 단순한 구조다.
 
 ## 4. 토픽 목록
 
@@ -153,11 +171,16 @@ ros2 launch autodrive_bringup core.launch.py
 
 ## 8. 현재 구현 범위
 
-- 카메라(전/후방)와 차선 인식(`autodrive_perception`)은 실제로 동작합니다.
-- 차량은 **Ackermann 구조**(좌우 개별 구동이 아니라 조향 1개 + 스로틀 1개)이며,
-  `autodrive_vehicle`이 Arduino Mega와 텍스트 기반 시리얼 프로토콜로 통신합니다
-  (`M <throttle_pwm>`, `ST <steer_pwm> <duration_ms>`, `SC`, `STOP` — 상세는
-  `autodrive_vehicle/core/serial_protocol.py`와
+- 카메라(전/후방)와 차선 인식/추종 목표 경로 생성(`autodrive_perception`의
+  `lane_detector_node`)은 실제로 동작합니다 — `bev_node`/`local_map_node`는
+  아직 미구현 스켈레톤입니다 (3절 참고). 생성된 목표 경로(`/perception/lane_reference`)는
+  아직 저수준 조향에 연결되지 않았습니다 (다음 단계).
+- 차량은 **Ackermann 조향**(전륜 조향 모터 1개로 회전)이며 구동은 좌/우 바퀴
+  각각 독립된 모터/PWM 핀으로 배선되어 있습니다 (differential-drive처럼 좌우를
+  다른 속도로 돌리진 않고, 지금은 동일한 throttle 값을 좌우에 동시에 적용 —
+  회전은 조향 모터가 전담). `autodrive_vehicle`이 Arduino Mega와 텍스트 기반
+  시리얼 프로토콜로 통신합니다 (`M <throttle_pwm>`, `ST <steer_pwm> <duration_ms>`,
+  `SC`, `STOP` — 상세는 `autodrive_vehicle/core/serial_protocol.py`와
   `autodrive_vehicle/arduino/mega_motor_controller/mega_motor_controller.ino` 참고).
   단위는 **PWM**이며 토크가 아닙니다.
 - **조향 각도 피드백 센서는 아직 설치 전**이라 `steering_pid_node`는 지금
