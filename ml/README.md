@@ -2,9 +2,11 @@
 
 `autodrive_perception/core/lane_detector.py`의 `mask_white()`(adaptiveThreshold
 기반)를 대체하기 위한 준비 단계. SAM3는 라이브 파이프라인이 아니라 **오프라인
-자동 라벨링 도구**로만 쓰고, 그 라벨로 경량 실시간 세그멘테이션 모델(TinyUNet)을
-학습시킨다. 학습된 모델을 실제 ROS 노드에 통합하는 것은 이 계획의 범위 밖이다
-(다음 단계).
+자동 라벨링 도구**로만 쓰고, 그 라벨로 경량 실시간 세그멘테이션 모델을
+학습시킨다. 후보 아키텍처는 두 개 (`ml/training/model.py`의 TinyUNet과
+`ml/training/pidnet.py`의 PIDNetLite) -- 같은 데이터/파이프라인으로 둘 다
+학습시켜서 `compare_with_lane_detector.py`로 비교한 뒤 하나만 고른다. 학습된
+모델을 실제 ROS 노드에 통합하는 것은 이 계획의 범위 밖이다 (다음 단계).
 
 이 디렉터리는 **colcon이 인식하는 `src/` 밖**에 있는 순수 파이썬 트리다 (colcon
 빌드/`ament_python` 패키지가 아님) -- 이유는 아래 "환경" 참고.
@@ -102,10 +104,26 @@ python ml/labeling/masks_to_labels.py   # rejected_frames.txt 반영해서 재�
 ### ④ 경량 모델 학습
 
 ```bash
-python ml/training/train.py --exp-name <실험명>
+python ml/training/train.py --exp-name <실험명>                                      # TinyUNet (기본)
+python ml/training/train.py --exp-name <실험명> --config ../configs/train_pidnet.yaml  # PIDNetLite
 ```
-- Best checkpoint: `ml/runs/<실험명>/best.pt`
+- Best checkpoint: `ml/runs/<실험명>/best.pt` (어떤 아키텍처로 학습했는지도 체크포인트 안에 같이 저장됨 -- 로드하는 쪽에서 따로 지정할 필요 없음)
 - 정성적 확인용 스냅샷(입력|SAM3 라벨|모델 예측 나란히): `ml/runs/<실험명>/val_samples/epoch_*.png`
+- `num_workers`가 너무 크면(코어 수 대비) 오히려 느려질 수 있음 -- `train.yaml`/`train_pidnet.yaml`의 주석 참고 (특히 train/val 로더에 동시에 많은 워커를 주면 서로 자원을 다퉈서 역효과가 났던 사례가 있었음).
+
+**노트북/저전력 GPU에서 유난히 느리다면**: GPU 전력 제한(power limit)이 기본값으로
+낮게 잡혀있는지 먼저 확인할 것 (특히 ThinkPad류 슬림 비즈니스 노트북 -- 게이밍
+노트북과 달리 칩 스펙상 최대치보다 훨씬 낮은 TGP로 공장 출하되는 경우가 흔함):
+```bash
+nvidia-smi -q -d PERFORMANCE | grep -A3 "Clocks Event Reasons"
+nvidia-smi -q -d POWER | grep -E "Current Power Limit|Default Power Limit|Max Power Limit"
+```
+`SW Power Cap: Active`가 뜨고 클럭이 최대치의 절반 이하라면 전력 제한이 병목이다.
+직접 올릴 수 있는 만큼만 올려짐 (하드웨어/펌웨어가 실제로 버틸 수 있는 선에서
+드라이버가 알아서 clamp함, 그 이상은 거부됨):
+```bash
+sudo nvidia-smi -pl <원하는 W>   # 라이브에서 즉시 적용, 재부팅하면 초기화됨
+```
 
 ### 검증: 기존 파이프라인과 비교
 
@@ -114,10 +132,23 @@ python ml/training/compare_with_lane_detector.py --checkpoint ml/runs/<실험명
 ```
 `LaneDetector`를 서브클래싱해서 `mask_white()`만 학습된 모델로 교체하고, 나머지
 (Hough/클러스터링/트래킹)는 그대로 재사용 -- **`lane_detector_node.py`나
-`lane_detector.yaml`은 건드리지 않는 순수 비교 도구**다. 결과는
-`ml/runs/<실험명>/compare/`에:
-- `<frame_id>.png`: baseline(adaptiveThreshold) vs learned(TinyUNet) 나란히 비교
+`lane_detector.yaml`은 건드리지 않는 순수 비교 도구**다. 체크포인트에 저장된
+`model` 값(tinyunet/pidnet)을 보고 알아서 맞는 아키텍처로 로드하므로 두 후보
+아무 체크포인트나 그대로 넘기면 됨. 결과는 `ml/runs/<실험명>/compare/`에:
+- `<frame_id>.png`: baseline(adaptiveThreshold) vs learned(TinyUNet/PIDNet) 나란히 비교
 - `tracking_stability.csv`: 프레임별 confirmed 라인 개수 및 x_near/x_far (프레임 간 안정성 육안+수치 비교용)
+
+## 다른 머신에서 이어하기 (예: 더 강력한 GPU 데스크탑)
+
+`ml/data/`와 `ml/runs/`는 `.gitignore`에 걸려있어 **git으로는 안 넘어간다** --
+코드(`git pull`)만 받아지고, 아래는 USB/rsync 등 별도 방법으로 옮겨야 한다:
+
+- `ml/data/raw_frames/`, `ml/data/labels/`, `ml/data/splits.json` -- ④ 학습에 필요한 전부.
+  `sam3_raw/`는 이미 ③을 거쳤다면 굳이 안 옮겨도 됨 (필터 값 재조정하고 싶을 때만 필요).
+- SAM3(②)는 원래 머신에서 이미 다 돌렸다면 새 머신에 SAM3/conda env를 새로
+  설치할 필요 없음 -- ④(`train.py`)와 검증(`compare_with_lane_detector.py`)만
+  돌리면 되고, 이건 PyTorch + opencv-python만 있으면 됨 (`requirements-sam3-env.txt`
+  참고, SAM3 자체 설치는 불필요).
 
 ## 데이터 규모 가이드
 

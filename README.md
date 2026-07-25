@@ -178,6 +178,12 @@ ros2 launch autodrive_bringup core.launch.py
   시리얼 포트를 여는 구조라 **같은 물리 포트를 가리키면 서로 충돌**할 수
   있습니다. 실제로 몇 개의 Arduino/포트가 있는지에 따라 통합이 필요할 수
   있습니다 (아직 미해결).
+- `ml/`(이 저장소의 colcon 워크스페이스 밖, 별도 파이썬 트리)에 `LaneDetector.mask_white()`의
+  adaptiveThreshold를 대체하기 위한 준비 작업이 진행 중입니다: SAM3를 오프라인
+  자동 라벨링 도구로 써서 차선 마스크 학습 데이터를 만들고, 그 데이터로 경량
+  실시간 세그멘테이션 모델(TinyUNet/PIDNetLite 후보)을 학습시킵니다. 아직 실제
+  ROS 노드에는 통합되지 않은 별도 실험 단계이며, 상세 실행 가이드는
+  `ml/README.md` 참고.
 
 ## 9. 향후 미션 구현 계획
 
