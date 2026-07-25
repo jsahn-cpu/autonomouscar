@@ -1,0 +1,39 @@
+# Config for train.py (and read back by compare_with_lane_detector.py via
+# the saved checkpoint's embedded copy of this config, so the two stay in
+# sync automatically -- image_size/base_channels must match what a
+# checkpoint was actually trained with).
+#
+# See train_pidnet.yaml for the other candidate architecture (same
+# training script, just `python train.py --config ../configs/train_pidnet.yaml`).
+
+model: tinyunet          # or "pidnet" -- see train_pidnet.yaml
+
+image_size: [288, 512]  # [H, W] -- downsized from the source 1080x1920;
+                          # plenty of resolution for a single-class binary
+                          # mask, and keeps training/inference cheap. Raise
+                          # this later only if thin/distant lines are
+                          # visibly lost at this size in val snapshots.
+# crop_bottom_fraction: dataset.py supports cropping to only the bottom N%
+# of each frame before resizing (an ROI-restriction idea considered and
+# shelved for now -- full frame it is). Defaults to 1.0 (no crop) if unset.
+batch_size: 16           # bumped from 8 -- fewer Python-loop/kernel-launch
+                          # round-trips per epoch for the same total work.
+                          # 32 OOM'd on the 4GB GPU (U-Net skip connections
+                          # hold onto several activation maps at once); 16
+                          # is the safe middle ground.
+epochs: 60
+lr: 0.001
+weight_decay: 0.0001
+base_channels: 16        # TinyUNet's width multiplier -- 16 measures at
+                          # ~0.48M params (see model.py's __main__ check)
+
+bce_weight: 0.5
+dice_weight: 0.5
+
+num_workers: 8           # bumped from 2 -- machine has 16 cores; the first
+                          # real-data run showed data loading (cv2 decode/
+                          # resize/augment per sample), not the GPU, as the
+                          # actual bottleneck for a model this small
+snapshot_every_n_epochs: 5
+num_val_snapshots: 4      # fixed val frames to render input|ground-truth|
+                           # prediction snapshots for each time this fires

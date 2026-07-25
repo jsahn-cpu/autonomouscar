@@ -57,6 +57,7 @@ Camera
 | `/perception/local_map` | `nav_msgs/msg/OccupancyGrid` |
 | `/perception/lane_debug/image/compressed` | `sensor_msgs/msg/CompressedImage` (JPEG. 추적된 차선을 원본 프레임 위에 그린 디버그 뷰 — 주행 판단에는 쓰이지 않음) |
 | `/perception/lane_mask/compressed` | `sensor_msgs/msg/CompressedImage` (PNG. `LaneDetector.mask_white()`의 흑백 이진 마스크 그대로) |
+| `/perception/lane_pipeline_debug/image/compressed` | `sensor_msgs/msg/CompressedImage` (JPEG. `publish_pipeline_debug: true`일 때만 발행. 마스크/raw Hough segment/클러스터(색상별)/최종결과 2x2 타일 뷰 — 재튜닝용, 평소엔 꺼둠) |
 | `/perception/lane_lines` | `std_msgs/msg/Float32MultiArray` (아래 필드 규약 참고) |
 | `/localization/camera_pose` | `geometry_msgs/msg/PoseWithCovarianceStamped` |
 | `/localization/pose` | `geometry_msgs/msg/PoseWithCovarianceStamped` |

@@ -1,0 +1,49 @@
+# Config for label_with_sam3.py, score_probe.py, and masks_to_labels.py.
+
+# Prompt ensemble -- run every one of these on every frame (label_with_sam3.py),
+# keep whichever candidates clear confidence_threshold from ANY of them
+# (masks_to_labels.py). Scores vary a lot by prompt on this scene: measured
+# top scores were "white lane line" 0.379, "white line" 0.281, "lane line"
+# 0.121, "road marking" 0.054 -- relying on a single prompt would miss
+# whatever that prompt happens to score low on for a given frame/lighting.
+prompts:
+  - "white lane line"
+  - "lane line"
+  - "white line"
+  - "road marking"
+
+# Applied both as label_with_sam3.py's SAM3-side capture threshold (an
+# instance scoring below this is never even saved) AND as
+# masks_to_labels.py's default --min-score. 0.3 was the highest threshold
+# that still surfaced real dashed-line fragments in manual testing; going
+# much lower (0.1) let enough candidates through that the full-resolution
+# mask interpolation step OOMs on a 4GB GPU. Because it's also the capture
+# floor, masks_to_labels.py's --min-score can only be raised above this
+# value for free (stricter re-filtering) -- lowering it below what was
+# captured here requires re-running label_with_sam3.py.
+confidence_threshold: 0.3
+
+# masks_to_labels.py only: drop mask pixels above this row fraction
+# (ceiling/walls -- never floor). Deliberately NOT reusing
+# lane_detector.yaml's roi_left_ratio/roi_top_width_ratio/
+# roi_bottom_width_ratio -- that narrower trapezoid (plus the left-side
+# cut) exists only to work around the Hough pipeline's inability to tell
+# the dashed center line from the solid right boundary. A segmentation
+# model has no such limitation and benefits from seeing every white
+# marking in frame, so only the ceiling/wall exclusion is kept.
+roi_top_ratio: 0.45
+
+# masks_to_labels.py's shape filter (cv2.minAreaRect on each instance's
+# mask contour, after the ROI crop above) -- rejects blobby false
+# positives (hands, shoes, glare) that aren't line-shaped.
+min_aspect_ratio: 3.0
+# Lower than lane_detector.yaml's min_line_length_px (60) on purpose: a
+# single SAM3 instance is often just one dash of a dashed line, which is
+# legitimately shorter than what the Hough pipeline (which instead
+# clusters multiple Hough segments together first) considers a minimum.
+min_length_px: 30.0
+
+# masks_to_labels.py: instances (possibly from different prompts) whose
+# masks overlap above this IoU are collapsed to the single highest-scoring
+# one before the final OR-merge.
+iou_dedup_threshold: 0.5

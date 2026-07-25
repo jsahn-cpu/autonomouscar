@@ -1,0 +1,36 @@
+# PIDNet-lite variant of train.yaml -- same training script (train.py),
+# same data/splits, only the model + its extra loss terms differ. Run with:
+#   python train.py --exp-name <name> --config ../configs/train_pidnet.yaml
+# Compare its checkpoint against a tinyunet run with
+# compare_with_lane_detector.py to decide which one actually wins before
+# either goes anywhere near the real-time pipeline.
+
+model: pidnet
+
+image_size: [288, 512]  # [H, W] -- same as train.yaml; keep these in sync
+                          # if you want a fair side-by-side comparison
+batch_size: 12  # PIDNet has more branches/activations than TinyUNet per
+                  # sample, so kept lower than train.yaml's 16 to stay safe
+                  # on the 4GB GPU (bumped from 8 to still cut kernel-launch
+                  # round-trips somewhat)
+epochs: 60
+lr: 0.001
+weight_decay: 0.0001
+
+pidnet_base_channels: 32   # PIDNetLite's width multiplier -- 32 measures
+                             # at ~1.5M params (see pidnet.py's __main__ check)
+pidnet_aux_weight: 0.4      # deep-supervision loss weight on the I/context
+                             # branch's own (lower-res) prediction
+pidnet_boundary_weight: 20.0  # boundary BCE weight -- kept high since
+                             # boundary pixels (see losses.extract_boundary)
+                             # are a tiny minority even within the already-
+                             # sparse foreground mask; too low and the
+                             # boundary branch just learns all-background
+
+bce_weight: 0.5    # weights for the MAIN segmentation loss term (both here
+dice_weight: 0.5   # and inside val_criterion, which is always plain BCEDice
+                     # regardless of model, for cross-candidate comparability)
+
+num_workers: 8
+snapshot_every_n_epochs: 5
+num_val_snapshots: 4

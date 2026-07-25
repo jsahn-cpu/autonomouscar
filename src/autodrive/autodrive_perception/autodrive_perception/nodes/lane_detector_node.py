@@ -6,6 +6,7 @@ logic lives in autodrive_perception.core.lane_detector.
 from typing import Optional
 
 import cv2
+import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
@@ -14,6 +15,7 @@ from std_msgs.msg import Float32MultiArray
 
 from autodrive_perception.core.lane_detector import LaneDetector
 from autodrive_perception.core.lane_tracker import LaneTracker
+from autodrive_perception.core.reference_lane import ReferenceLaneBuilder
 
 
 class LaneDetectorNode(Node):
@@ -35,6 +37,7 @@ class LaneDetectorNode(Node):
         self.declare_parameter('roi_top_ratio', 0.45)
         self.declare_parameter('roi_top_width_ratio', 0.5)
         self.declare_parameter('roi_bottom_width_ratio', 1.0)
+        self.declare_parameter('roi_left_ratio', 0.0)
         self.declare_parameter('filter_outside_track_boundary', True)
         self.declare_parameter('min_boundary_span_ratio', 0.3)
         self.declare_parameter('min_line_aspect_ratio', 3.0)
@@ -49,6 +52,14 @@ class LaneDetectorNode(Node):
         self.declare_parameter('parallel_angle_tol_deg', 10.0)
         self.declare_parameter('spacing_tol_ratio', 0.35)
         self.declare_parameter('min_consistent_group_size', 2)
+        self.declare_parameter('min_projection_slope', 0.15)
+        self.declare_parameter('max_abs_x_ratio', 1.5)
+        self.declare_parameter('lane_offset_px', 0.0)
+        self.declare_parameter('reference_poly_degree', 2)
+        self.declare_parameter('reference_num_samples', 20)
+        self.declare_parameter('publish_pipeline_debug', False)
+        self.declare_parameter('pipeline_debug_scale', 0.5)
+        self.declare_parameter('crop_debug_to_roi', True)
 
         self._lane_detector = LaneDetector(
             adaptive_block_size=self.get_parameter(
@@ -66,6 +77,7 @@ class LaneDetectorNode(Node):
             roi_top_width_ratio=self.get_parameter('roi_top_width_ratio').get_parameter_value().double_value,
             roi_bottom_width_ratio=self.get_parameter(
                 'roi_bottom_width_ratio').get_parameter_value().double_value,
+            roi_left_ratio=self.get_parameter('roi_left_ratio').get_parameter_value().double_value,
             filter_outside_track_boundary=self.get_parameter(
                 'filter_outside_track_boundary').get_parameter_value().bool_value,
             min_boundary_span_ratio=self.get_parameter(
@@ -103,7 +115,29 @@ class LaneDetectorNode(Node):
                 'spacing_tol_ratio').get_parameter_value().double_value,
             min_consistent_group_size=self.get_parameter(
                 'min_consistent_group_size').get_parameter_value().integer_value,
+            min_projection_slope=self.get_parameter(
+                'min_projection_slope').get_parameter_value().double_value,
+            max_abs_x_ratio=self.get_parameter(
+                'max_abs_x_ratio').get_parameter_value().double_value,
         )
+        # Right-boundary-relative target curve for lane keeping -- see
+        # reference_lane.py for why "right boundary" is an assumption
+        # (rightmost tracked line, no real solid/dashed label to check
+        # against) and why lane_offset_px is a fixed pixel value rather than
+        # a real metric distance (no camera calibration yet).
+        self._reference_lane = ReferenceLaneBuilder(
+            lane_offset_px=self.get_parameter('lane_offset_px').get_parameter_value().double_value,
+            poly_degree=self.get_parameter(
+                'reference_poly_degree').get_parameter_value().integer_value,
+            num_samples=self.get_parameter(
+                'reference_num_samples').get_parameter_value().integer_value,
+        )
+        self._publish_pipeline_debug: bool = self.get_parameter(
+            'publish_pipeline_debug').get_parameter_value().bool_value
+        self._pipeline_debug_scale: float = self.get_parameter(
+            'pipeline_debug_scale').get_parameter_value().double_value
+        self._crop_debug_to_roi: bool = self.get_parameter(
+            'crop_debug_to_roi').get_parameter_value().bool_value
         self._bridge = CvBridge()
 
         # Depth 1 + drop-old-on-overflow: if processing falls behind the
@@ -139,6 +173,22 @@ class LaneDetectorNode(Node):
         # _select_evenly_spaced limitations) -- a consumer needs to do that
         # selection itself for now rather than trust an index here.
         self._lines_pub = self.create_publisher(Float32MultiArray, '/perception/lane_lines', 1)
+        # Flattened [x_0, y_0, x_1, y_1, ...], near to far, in IMAGE PIXEL
+        # coordinates -- NOT the same thing as /planning/reference_path
+        # (world-frame nav_msgs/Path from the full localization+planning
+        # stack). This is a direct camera-space target curve, closer to
+        # visual servoing than a planned path. See reference_lane.py.
+        self._reference_pub = self.create_publisher(Float32MultiArray, '/perception/lane_reference', 1)
+        # Off by default -- see LaneDetector.draw_pipeline_debug(). Meant for
+        # re-tuning sessions (e.g. after the camera's mounting position
+        # changes), not normal operation: composing+encoding a 2x2 tiled
+        # image on top of everything else costs real CPU this node doesn't
+        # otherwise spend.
+        self._pipeline_debug_pub = (
+            self.create_publisher(
+                CompressedImage, '/perception/lane_pipeline_debug/image/compressed', 1)
+            if self._publish_pipeline_debug else None
+        )
 
         self.get_logger().info('lane_detector_node started')
 
@@ -157,7 +207,8 @@ class LaneDetectorNode(Node):
 
         mask = self._lane_detector.last_mask
         if mask is not None:
-            mask_msg = self._bridge.cv2_to_compressed_imgmsg(mask, dst_format='png')
+            mask_for_pub = self._lane_detector.crop_to_roi(mask) if self._crop_debug_to_roi else mask
+            mask_msg = self._bridge.cv2_to_compressed_imgmsg(mask_for_pub, dst_format='png')
             mask_msg.header.stamp = msg.header.stamp
             mask_msg.header.frame_id = msg.header.frame_id
             self._mask_pub.publish(mask_msg)
@@ -171,6 +222,19 @@ class LaneDetectorNode(Node):
         debug_base = cv2.cvtColor(gray_image, cv2.COLOR_GRAY2BGR)
         debug_image = self._lane_detector.draw_debug(debug_base, confirmed)
 
+        reference = self._reference_lane.build(confirmed)
+        if reference is not None:
+            pts = reference.astype(np.int32).reshape(-1, 1, 2)
+            cv2.polylines(debug_image, [pts], isClosed=False, color=(0, 0, 255), thickness=3)
+
+        # Crop-and-zoom to the ROI, not a perspective/BEV transform (that
+        # was dropped for this project -- see LaneDetector.crop_to_roi()).
+        # Applied last, after all annotations are drawn, so the crop+resize
+        # carries them along instead of needing separately-adjusted
+        # coordinates for a cropped canvas.
+        if self._crop_debug_to_roi:
+            debug_image = self._lane_detector.crop_to_roi(debug_image)
+
         debug_msg = self._bridge.cv2_to_compressed_imgmsg(debug_image, dst_format='jpg')
         debug_msg.header.stamp = msg.header.stamp
         debug_msg.header.frame_id = msg.header.frame_id
@@ -182,6 +246,24 @@ class LaneDetectorNode(Node):
             lines_msg.data.append(det['x_near'])
             lines_msg.data.append(det['x_far'])
         self._lines_pub.publish(lines_msg)
+
+        reference_msg = Float32MultiArray()
+        if reference is not None:
+            reference_msg.data = reference.flatten().tolist()
+        self._reference_pub.publish(reference_msg)
+
+        if self._pipeline_debug_pub is not None:
+            pipeline_debug = self._lane_detector.draw_pipeline_debug(
+                debug_base, confirmed, crop_to_roi=self._crop_debug_to_roi)
+            if self._pipeline_debug_scale != 1.0:
+                pipeline_debug = cv2.resize(
+                    pipeline_debug, None,
+                    fx=self._pipeline_debug_scale, fy=self._pipeline_debug_scale,
+                    interpolation=cv2.INTER_AREA)
+            pipeline_msg = self._bridge.cv2_to_compressed_imgmsg(pipeline_debug, dst_format='jpg')
+            pipeline_msg.header.stamp = msg.header.stamp
+            pipeline_msg.header.frame_id = msg.header.frame_id
+            self._pipeline_debug_pub.publish(pipeline_msg)
 
 
 def main(args: Optional[list] = None) -> None:

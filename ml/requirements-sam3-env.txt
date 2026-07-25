@@ -1,0 +1,18 @@
+# NOT an apt/rosdep manifest -- this workspace's other packages resolve
+# dependencies via package.xml + rosdep (apt-only), but this pipeline runs
+# in the separate `sam3` conda env (Python 3.12) and needs pip-only,
+# GPU-build-specific packages that rosdep cannot resolve. See ml/README.md
+# for why this env is kept fully separate from the ROS system Python 3.10.
+#
+# Usage:
+#   conda activate sam3
+#   pip install -r requirements-sam3-env.txt
+#
+# torch/torchvision/sam3 itself are assumed already installed per the SAM3
+# setup done earlier this session (torch==2.11.0+cu128, sam3 editable
+# install with [dev,notebooks,train] extras) -- not re-pinned here to avoid
+# clobbering that working install with a plain `pip install torch`.
+
+opencv-python>=4.9
+pyyaml>=6.0
+tqdm>=4.66

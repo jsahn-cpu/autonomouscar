@@ -50,6 +50,7 @@ class LaneDetector:
         roi_top_ratio: float = 0.45,
         roi_top_width_ratio: float = 0.5,
         roi_bottom_width_ratio: float = 1.0,
+        roi_left_ratio: float = 0.0,
         filter_outside_track_boundary: bool = True,
         min_boundary_span_ratio: float = 0.3,
         min_line_aspect_ratio: float = 3.0,
@@ -112,6 +113,13 @@ class LaneDetector:
         self._roi_top_ratio = roi_top_ratio
         self._roi_top_width_ratio = roi_top_width_ratio
         self._roi_bottom_width_ratio = roi_bottom_width_ratio
+        # Fraction of the image width (from the left) to exclude entirely --
+        # e.g. 0.3 keeps only the rightmost 70% of each row. Meant to drop
+        # the dashed center line and anything left of it (other parking-lot
+        # markings, the left ROI half in general) so only the right solid
+        # boundary is ever a detection candidate, rather than relying on
+        # tracking/selection logic to pick the right one out of several.
+        self._roi_left_ratio = roi_left_ratio
         self._filter_outside_track_boundary = filter_outside_track_boundary
         # A detection must span at least this fraction of the ROI's height to
         # be treated as a candidate track-boundary line -- filters out short
@@ -129,6 +137,8 @@ class LaneDetector:
         # a shared corner -- see _remove_closed_shapes.
         self._corner_tol_px = corner_tol_px
         self._last_mask: Optional[Any] = None
+        self._last_segments: List[_Segment] = []
+        self._last_raw_clusters: List[List[_Segment]] = []
 
     @property
     def last_mask(self) -> Optional[Any]:
@@ -138,18 +148,48 @@ class LaneDetector:
 
     def _roi_polygon(self, width: int, height: int) -> np.ndarray:
         """Trapezoid ROI corners: narrow at the top/far edge, wide at the
-        bottom/near edge (see __init__ docstring for why)."""
+        bottom/near edge (see __init__ docstring for why), then clipped on
+        the left at roi_left_ratio if set."""
         top_row = height * self._roi_top_ratio
         bottom_row = height - 1
         center_x = width / 2.0
         top_half_w = width * self._roi_top_width_ratio / 2.0
         bottom_half_w = width * self._roi_bottom_width_ratio / 2.0
+        left_bound = width * self._roi_left_ratio
+        top_left_x = max(center_x - top_half_w, left_bound)
+        bottom_left_x = max(center_x - bottom_half_w, left_bound)
         return np.array([
-            [center_x - top_half_w, top_row],
+            [top_left_x, top_row],
             [center_x + top_half_w, top_row],
             [center_x + bottom_half_w, bottom_row],
-            [center_x - bottom_half_w, bottom_row],
+            [bottom_left_x, bottom_row],
         ], dtype=np.int32)
+
+    def crop_to_roi(self, image: Any) -> Any:
+        """Warp the ROI trapezoid to fill a rectangle the same size as the
+        input, instead of a plain bounding-box crop -- the trapezoid's top
+        edge is narrower than its bottom (see _roi_polygon), so a bounding-
+        box crop still leaves two unused triangular corners at the top; this
+        maps all four trapezoid corners onto the four rectangle corners so
+        nothing outside the ROI is visible at all.
+
+        This is NOT the bird's-eye-view/ground-plane homography that was
+        dropped for this project (see class docstring): that one assumed a
+        fixed camera height/pitch to project onto real-world ground
+        coordinates, and vehicle vibration drifts the real pose enough to
+        make that unreliable. This warp carries no such assumption -- the
+        ROI trapezoid is just an already-tuned image-space shape, not
+        derived from any camera height/pitch/extrinsic, so there's no
+        real-world mapping here to get wrong. The tradeoff is purely visual:
+        a straight line in the original perspective view generally looks
+        curved after this warp, since the stretch varies by row. Display
+        only -- call it on an already-rendered debug image, never on
+        anything fed into detect()."""
+        h, w = image.shape[:2]
+        roi_polygon = self._roi_polygon(w, h).astype(np.float32)
+        dst = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+        transform = cv2.getPerspectiveTransform(roi_polygon, dst)
+        return cv2.warpPerspective(image, transform, (w, h))
 
     def mask_white(self, image: Any) -> Any:
         """Return a binary (0/255) mask of near-white pixels, restricted to
@@ -477,18 +517,23 @@ class LaneDetector:
         `image` may be BGR or already-grayscale -- see mask_white()."""
         mask = self.mask_white(image)
         # Cached rather than recomputed by callers that also want to inspect
-        # the mask (e.g. for a debug topic) -- mask_white() is the single
-        # most expensive step here, so recomputing it a second time per
-        # frame just to look at it would undo the perf work this ROI/hough
-        # tuning already went through.
+        # intermediate pipeline stages (e.g. for debug topics) --
+        # mask_white()/_find_segments()/_cluster_collinear() are already the
+        # expensive steps here, so this is just stashing references to what
+        # detect() computes anyway, not doing any extra work in the normal
+        # path. See draw_pipeline_debug() for what these are used for.
         self._last_mask = mask
         segs = self._find_segments(mask)
+        self._last_segments = segs
         if not segs:
+            self._last_raw_clusters = []
             return []
 
+        groups = self._cluster_collinear(segs)
+        self._last_raw_clusters = [[segs[i] for i in group_idx] for group_idx in groups]
+
         detections = []
-        for group_idx in self._cluster_collinear(segs):
-            group_segs = [segs[i] for i in group_idx]
+        for group_segs in self._last_raw_clusters:
             points = np.vstack([s.points for s in group_segs])
             if not self._is_line_like(points):
                 continue
@@ -524,6 +569,89 @@ class LaneDetector:
                 cx1, cy1, cx2, cy2 = clipped
                 cv2.line(out, (int(cx1), int(cy1)), (int(cx2), int(cy2)), (0, 200, 0), 3)
         return out
+
+    def draw_pipeline_debug(
+        self, image: Any, detections: Sequence[Dict[str, Any]], crop_to_roi: bool = False,
+    ) -> Any:
+        """Compose a 2x2 tiled view of the detection pipeline's stages: mask,
+        raw Hough segments (pre-clustering), clusters (color-coded,
+        pre-filter), and the final result (same as draw_debug()).
+
+        None of those intermediate stages are visible from the final debug
+        image alone, which is fine for normal operation but not for
+        re-tuning thresholds/ROI/etc. from scratch -- e.g. after the
+        camera's mounting position (height, pitch) changes and everything
+        tuned against the old framing needs re-verifying.
+
+        Must be called after detect() on the same frame -- reads
+        self._last_mask/_last_segments/_last_raw_clusters, which detect()
+        populates as a side effect rather than this recomputing them.
+
+        If crop_to_roi, each panel is individually cropped+zoomed (see
+        crop_to_roi()) before the labels are drawn on it -- done per-panel
+        rather than once on the final composite, since the composite is a
+        2x2 tile, not one coherent image the crop rectangle would apply to."""
+        base = image if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        h, w = base.shape[:2]
+        roi_polygon = self._roi_polygon(w, h)
+
+        mask = self._last_mask
+        if mask is not None:
+            panel_mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            if panel_mask.shape[:2] != (h, w):
+                # mask_white() works on a copy downscaled by hough_scale --
+                # resize back up so all four panels tile at the same size.
+                panel_mask = cv2.resize(panel_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+        else:
+            panel_mask = np.zeros_like(base)
+
+        # Dimmed backdrop for the segment/cluster overlays -- full
+        # brightness would make the overlay colors hard to make out.
+        dim = (base.astype(np.float32) * 0.35).astype(np.uint8)
+
+        panel_segments = dim.copy()
+        for seg in self._last_segments:
+            (x1, y1), (x2, y2) = seg.points
+            cv2.line(panel_segments, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
+
+        panel_clusters = dim.copy()
+        palette = [
+            (0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255),
+            (255, 0, 255), (255, 255, 0), (128, 0, 255), (255, 128, 0),
+        ]
+        for i, group_segs in enumerate(self._last_raw_clusters):
+            color = palette[i % len(palette)]
+            for seg in group_segs:
+                (x1, y1), (x2, y2) = seg.points
+                cv2.line(panel_clusters, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+
+        panel_final = self.draw_debug(base, detections)  # already draws the ROI outline itself
+
+        if crop_to_roi:
+            # Cropped first, ROI outline skipped after -- once cropped, the
+            # visible frame already approximates the ROI, and the outline's
+            # coordinates would need re-deriving for the new crop+zoom
+            # rather than just being reused as-is.
+            panel_mask = self.crop_to_roi(panel_mask)
+            panel_segments = self.crop_to_roi(panel_segments)
+            panel_clusters = self.crop_to_roi(panel_clusters)
+            panel_final = self.crop_to_roi(panel_final)
+        else:
+            for panel in (panel_mask, panel_segments, panel_clusters):
+                cv2.polylines(panel, [roi_polygon], isClosed=True, color=(255, 128, 0), thickness=1)
+
+        def label(panel: Any, text: str) -> Any:
+            cv2.putText(panel, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+            return panel
+
+        label(panel_mask, 'mask')
+        label(panel_segments, f'raw segments ({len(self._last_segments)})')
+        label(panel_clusters, f'clusters ({len(self._last_raw_clusters)})')
+        label(panel_final, f'final ({len(detections)})')
+
+        top = np.hstack([panel_mask, panel_segments])
+        bottom = np.hstack([panel_clusters, panel_final])
+        return np.vstack([top, bottom])
 
     @staticmethod
     def _clip_segment_to_polygon(

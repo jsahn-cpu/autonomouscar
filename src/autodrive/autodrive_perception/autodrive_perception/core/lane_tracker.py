@@ -52,6 +52,8 @@ class LaneTracker:
         parallel_angle_tol_deg: float = 10.0,
         spacing_tol_ratio: float = 0.35,
         min_consistent_group_size: int = 2,
+        min_projection_slope: float = 0.15,
+        max_abs_x_ratio: float = 1.5,
     ) -> None:
         # Must match LaneDetector's roi_top_ratio -- this is where the "far"
         # reference row for each line's x-intercept is measured, and the two
@@ -60,6 +62,21 @@ class LaneTracker:
         self._min_confirm_frames = min_confirm_frames
         self._max_missed_frames = max_missed_frames
         self._gating_mahalanobis = gating_mahalanobis
+        # Extrapolating a fitted line's crossing out to the near/far
+        # reference rows amplifies any angle error by (row span / vy) --
+        # for a line only shallowly off horizontal, that factor is huge, so
+        # a few pixels of fit noise on a real but near-horizontal marking
+        # (a shadow, glare streak, or seam roughly perpendicular to travel)
+        # produces a wildly wrong x-intercept that still passes a loose
+        # gate. Real lane boundaries run roughly along the direction of
+        # travel (steep in this ROI), so rejecting anything shallower than
+        # this also doubles as a shape filter, not just a numerical guard.
+        self._min_projection_slope = min_projection_slope
+        # Multiplied by image_width to bound a projected intercept -- was
+        # 3.0x (effectively unbounded: a 1920px-wide image allowed +-5760px)
+        # which let exactly the runaway extrapolations above through as a
+        # "confirmed" track for min_confirm_frames before disappearing again.
+        self._max_abs_x_ratio = max_abs_x_ratio
         # The track layout is a fixed number of parallel, evenly-spaced
         # boundary/divider lines -- something that persists long enough to
         # become its own confirmed track (e.g. a parking-space divider) but
@@ -120,7 +137,7 @@ class LaneTracker:
         """
         direction, origin = self._fit_line(det['points'])
         vy = direction[1]
-        if abs(vy) < 1e-2:
+        if abs(vy) < self._min_projection_slope:
             return None
         x_near = origin[0] + (near_row - origin[1]) / vy * direction[0]
         x_far = origin[0] + (far_row - origin[1]) / vy * direction[0]
@@ -211,7 +228,7 @@ class LaneTracker:
         """Feed one frame's detections in, get the confirmed subset out."""
         near_row = float(image_height - 1)
         far_row = float(image_height) * self._roi_top_ratio
-        max_abs_x = image_width * 3.0
+        max_abs_x = image_width * self._max_abs_x_ratio
 
         # The Kalman state (x_near, x_far) is only used to decide WHICH
         # detection belongs to which track (gating) -- a straight chord

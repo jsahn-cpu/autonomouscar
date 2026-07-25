@@ -10,6 +10,8 @@ lane_detector_node:
                                 # width, otherwise the line dominates its own neighborhood
                                 # average and stops looking "brighter than its surroundings".
                                 # Scaled for 1920x1080; halve/double with capture resolution.
+                                # (Internally also rescaled by hough_scale, since thresholding
+                                # runs on the same downscaled copy as Hough -- see mask_white.)
     adaptive_c: -15.0         # how many gray levels brighter than the local neighborhood
                                 # average a pixel must be to count as line paint (passed
                                 # straight to cv2.adaptiveThreshold's C, so more negative =
@@ -26,12 +28,14 @@ lane_detector_node:
     hough_min_line_length: 40 # drop segments shorter than this (noise) -- raised from 20
                                 # alongside hough_threshold, same reason
     hough_max_line_gap: 8     # kept small so dash gaps are NOT bridged into a false solid
-    hough_scale: 0.6          # run HoughLinesP on the mask downscaled by this factor (the
-                                # dominant cost in detect()); coordinates are scaled back up.
-                                # Lower is faster but can fragment curved solid lines into
-                                # "dashed" -- 0.6 was measured to cut CPU ~25% with no accuracy
-                                # loss on straight track sections; re-verify on curves before
-                                # going lower.
+    hough_scale: 0.6          # mask_white downscales by this factor before thresholding, and
+                                # Hough runs on that same smaller copy -- both were the dominant
+                                # cost in detect(); segment coordinates are scaled back up
+                                # afterward so nothing downstream sees anything but original-
+                                # resolution pixels. Lower is faster but can fragment curved
+                                # solid lines into "dashed" -- 0.6 measured ~2x faster than
+                                # resizing only before Hough, no accuracy loss on straight
+                                # sections; re-verify on curves before going lower.
     angle_tol_deg: 8.0        # max line-angle difference to treat two segments as collinear
     collinear_dist_tol_px: 25.0  # max perpendicular offset to treat two segments as collinear
     max_segments: 500          # cap on Hough segments considered per frame (longest kept),
@@ -41,6 +45,15 @@ lane_detector_node:
                                 # image width (centered) -- narrower since the floor view
                                 # narrows toward the vanishing point; the rest is wall/background
     roi_bottom_width_ratio: 1.0  # ROI trapezoid width at the bottom/near edge (full width)
+    roi_left_ratio: 0.3        # drop everything left of this fraction of image width
+                                # (e.g. 0.3 = keep only the right 70% of each row) --
+                                # excludes the dashed center line and anything further
+                                # left (other parking-lot markings) up front, so only the
+                                # right solid boundary can ever be a candidate, instead of
+                                # relying on tracking/selection to pick the right one out
+                                # of several. Re-check this if the camera framing changes
+                                # (same caveat as lane_offset_px below) -- it's a fraction
+                                # of the CURRENT frame width, not a fixed real position.
     filter_outside_track_boundary: true  # drop detections outside the leftmost/rightmost
                                 # boundary candidate (assumed to be the track's edge lines);
                                 # single-frame only, needs >=2 boundary candidates
@@ -95,3 +108,58 @@ lane_detector_node:
     min_consistent_group_size: 2  # need at least this many mutually parallel,
                                 # evenly-spaced lines before the spacing check
                                 # applies at all; below it, everything is kept
+    min_projection_slope: 0.15  # reject a detection whose fitted line is
+                                # shallower than this (abs(vy) of the unit
+                                # direction) before projecting it to the
+                                # near/far reference rows -- extrapolating a
+                                # near-horizontal line's crossing amplifies
+                                # tiny angle-fit noise into a huge x error
+                                # (e.g. a shadow/glare streak reported at
+                                # x=-800 while genuinely being tracked for a
+                                # few frames); real lane boundaries run
+                                # roughly along the direction of travel, i.e.
+                                # steep in this ROI, so this doubles as a
+                                # shape filter. Raised from an effectively
+                                # unused 0.01 after finding phantom tracks
+                                # like this hijack /perception/lane_reference
+                                # (see reference_lane.py: it just follows
+                                # whichever confirmed track has the largest
+                                # x_near, with no sanity bound of its own).
+    max_abs_x_ratio: 1.5       # reject a projected intercept farther than
+                                # this many image-widths from center -- was
+                                # 3.0 (effectively unbounded), which let the
+                                # runaway extrapolations above through as a
+                                # normally-confirmed track instead of being
+                                # caught by min_projection_slope alone
+    # Reference lane to follow (autodrive_perception/core/reference_lane.py):
+    # fits a curve to the rightmost tracked line (assumed right boundary --
+    # no real solid/dashed label to check against) and offsets it left.
+    lane_offset_px: 600.0      # TODO: rough estimate, not a real measurement -- eyeballed
+                                # from a ruler-gridded frame of the current camera framing,
+                                # where the dashed center line to solid right edge gap read
+                                # about 1100-1250px at mid-distance (600 = half that, to aim
+                                # for lane center). Was 150 under the old desk-test framing;
+                                # that framing is gone (much wider/closer view now) so the
+                                # old value no longer applies -- re-measure again any time
+                                # the camera's position/zoom/mount changes, since this is
+                                # purely image-scale-dependent, not a real physical distance.
+    reference_poly_degree: 2  # degree of the x=f(y) curve fit to the right line's own
+                                # detected points -- 2 (quadratic) captures gentle-to-
+                                # moderate curvature; only as good as the points available,
+                                # still an approximation on a sharp nearby curve
+    reference_num_samples: 20  # number of (x, y) points to sample along the fitted
+                                # curve for /perception/lane_reference and the debug draw
+    # Tiled mask/raw-segments/clusters/final debug view (see LaneDetector.
+    # draw_pipeline_debug()) -- off by default, meant for re-tuning sessions
+    # (e.g. once the camera is actually mounted and everything tuned against
+    # the old desk-test framing needs re-verifying), not normal operation.
+    publish_pipeline_debug: false
+    pipeline_debug_scale: 0.5  # the composite is 2x2 original-resolution panels
+                                # (e.g. 3840x2160 at 1920x1080); scaled down before
+                                # publishing to keep it reasonable to view/transport
+    crop_debug_to_roi: true   # crop debug images (lane_debug, lane_mask, and each
+                                # pipeline_debug panel) to the ROI trapezoid's bounding
+                                # rectangle and zoom to fill the frame -- display only,
+                                # NOT a perspective/bird's-eye-view transform (that was
+                                # dropped for this project, see LaneDetector.crop_to_roi()
+                                # docstring); what gets detected is unaffected either way
