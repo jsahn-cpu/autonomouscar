@@ -17,6 +17,7 @@ rosbag2_*/
 *.db3
 *.mcap
 *.mp4
+*.zip
 
 # ml/ pipeline data & training runs (large, regenerable -- see ml/README.md)
 ml/data/

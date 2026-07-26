@@ -9,7 +9,7 @@ registered as an autodrive_tools console_scripts entry point.
 Works identically against a live camera or a `ros2 bag play`-ed recording,
 since it's just a plain subscriber. Record with the stock CLI and play it
 back through this script to extract frames from it, e.g.:
-    ros2 bag record -o <bag> /camera/front/image_mono/compressed
+    ros2 bag record -o <bag> /camera/front/image/compressed
     ros2 bag play <bag>   # in another terminal, while this script runs
 
 Multiple --topic values are supported in one run (e.g. front+back cameras
@@ -59,22 +59,22 @@ class _TopicCollector:
         # cv_bridge's compressed_imgmsg_to_cv2 always calls cvtColor2(im,
         # 'bgr8', desired_encoding) internally regardless of the actual
         # decoded channel count, which crashes on a genuinely single-channel
-        # source (see lane_detector_node.py's use of 'passthrough' to work
-        # around this for the live ROS path). Decoding raw bytes ourselves
-        # sidesteps that entirely since there's no ROS message to build.
+        # source. Decoding raw bytes ourselves sidesteps that entirely since
+        # there's no ROS message to build.
         #
-        # Always decoded to grayscale here even for genuinely color sources
-        # (e.g. real vehicle-recorded bags, which turned out to publish
-        # plain color JPEGs unlike the live rig's grayscale mono topic) --
-        # every later stage (SAM3 labeling, LaneDetector, the trained
-        # model) is fine with either, and keeping raw_frames uniformly
-        # single-channel avoids a mixed-format dataset downstream.
+        # Always decoded to color (BGR) here, even against a genuinely
+        # single-channel mono source (which just upconverts to BGR with
+        # R=G=B, still 3-channel) -- SAM3 labeling and the trained model
+        # both use color now (better label accuracy than grayscale-only),
+        # and keeping raw_frames uniformly 3-channel avoids a mixed-format
+        # dataset downstream regardless of which topic a given session came
+        # from.
         self._seen_count += 1
         if (self._seen_count - 1) % self._every_n != 0:
             return
 
         arr = np.frombuffer(msg.data, np.uint8)
-        image = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+        image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if image is None:
             self._node.get_logger().warn("Failed to decode a frame, skipping")
             return
@@ -127,10 +127,10 @@ def parse_args() -> argparse.Namespace:
              "under the repo root, regardless of current working directory).",
     )
     parser.add_argument(
-        "--topic", nargs="+", default=["/camera/front/image_mono/compressed"],
-        help="One or more topics to collect from in this same run (e.g. "
-             "--topic /camera/front /camera/back for a bag recorded with "
-             "both cameras at once).",
+        "--topic", nargs="+", default=["/camera/front/image/compressed"],
+        help="One or more topics to collect from in this same run. Default "
+             "is the live rig's color front topic -- for the real-vehicle "
+             "bags use --topic /camera/front (their actual topic name).",
     )
     parser.add_argument(
         "--every-n-frames", type=int, default=30,

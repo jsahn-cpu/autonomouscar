@@ -63,7 +63,10 @@ def main() -> None:
     args = parse_args()
     with open(args.config) as f:
         config = yaml.safe_load(f)
-    prompts = config["prompts"]
+    # prompts is a {class_key: prompt_text} dict (see labeling.yaml) -- only
+    # the text values are sent to SAM3; meta.json is keyed by prompt text,
+    # which masks_to_labels.py routes on for its solid/dashed/area handling.
+    prompts = list(config["prompts"].values())
     confidence_threshold = config["confidence_threshold"]
 
     frames_dir = pathlib.Path(args.frames_dir)

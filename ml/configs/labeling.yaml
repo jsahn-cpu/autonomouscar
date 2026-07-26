@@ -1,49 +1,65 @@
 # Config for label_with_sam3.py, score_probe.py, and masks_to_labels.py.
+#
+# Multi-class taxonomy (see masks_to_labels.py): SAM3 prompts stay generic
+# (no left/right/1st/2nd wording -- SAM3 grounds visual/semantic concepts,
+# not spatial instructions like "the one on the right"). Left-vs-right and
+# lane-1-vs-lane-2 assignment happens in masks_to_labels.py by comparing
+# each connected blob's x-position after merging same-prompt instances --
+# much more reliable than hoping a text prompt encodes spatial position.
 
-# Prompt ensemble -- run every one of these on every frame (label_with_sam3.py),
-# keep whichever candidates clear confidence_threshold from ANY of them
-# (masks_to_labels.py). Scores vary a lot by prompt on this scene: measured
-# top scores were "white lane line" 0.379, "white line" 0.281, "lane line"
-# 0.121, "road marking" 0.054 -- relying on a single prompt would miss
-# whatever that prompt happens to score low on for a given frame/lighting.
 prompts:
-  - "white lane line"
-  - "lane line"
-  - "white line"
-  - "road marking"
+  solid_line: "solid lane line"     # -> split into left_solid / right_solid by x-position
+  dashed_line: "dashed lane line"   # -> single center_dashed class, no split needed
+  lane_area: "road lane"            # -> split into lane_1 / lane_2 by x-position
+
+# Class index written into the single-channel label PNG (0 = background).
+# Lines are layered on top of areas at any overlapping pixel (see
+# masks_to_labels.py) since the line itself is the more specific/important
+# label where the two would otherwise disagree.
+class_ids:
+  left_solid: 1
+  center_dashed: 2
+  right_solid: 3
+  lane_1: 4
+  lane_2: 5
 
 # Applied both as label_with_sam3.py's SAM3-side capture threshold (an
 # instance scoring below this is never even saved) AND as
 # masks_to_labels.py's default --min-score. 0.3 was the highest threshold
-# that still surfaced real dashed-line fragments in manual testing; going
-# much lower (0.1) let enough candidates through that the full-resolution
-# mask interpolation step OOMs on a 4GB GPU. Because it's also the capture
-# floor, masks_to_labels.py's --min-score can only be raised above this
-# value for free (stricter re-filtering) -- lowering it below what was
-# captured here requires re-running label_with_sam3.py.
+# that still surfaced real dashed-line fragments in manual testing on the
+# old prompt set -- re-run score_probe.py on the new prompts/dataset before
+# trusting this still holds.
 confidence_threshold: 0.3
 
 # masks_to_labels.py only: drop mask pixels above this row fraction
-# (ceiling/walls -- never floor). Deliberately NOT reusing
-# lane_detector.yaml's roi_left_ratio/roi_top_width_ratio/
-# roi_bottom_width_ratio -- that narrower trapezoid (plus the left-side
-# cut) exists only to work around the Hough pipeline's inability to tell
-# the dashed center line from the solid right boundary. A segmentation
-# model has no such limitation and benefits from seeing every white
-# marking in frame, so only the ceiling/wall exclusion is kept.
+# (ceiling/walls -- never floor).
 roi_top_ratio: 0.45
 
-# masks_to_labels.py's shape filter (cv2.minAreaRect on each instance's
-# mask contour, after the ROI crop above) -- rejects blobby false
-# positives (hands, shoes, glare) that aren't line-shaped.
-min_aspect_ratio: 3.0
-# Lower than lane_detector.yaml's min_line_length_px (60) on purpose: a
-# single SAM3 instance is often just one dash of a dashed line, which is
-# legitimately shorter than what the Hough pipeline (which instead
-# clusters multiple Hough segments together first) considers a minimum.
-min_length_px: 30.0
+# Shape filter for line prompts (solid_line/dashed_line) -- cv2.minAreaRect
+# on each instance's mask contour, after the ROI crop above. Rejects blobby
+# false positives (hands, shoes, glare) that aren't line-shaped. NOT
+# applied to lane_area instances (a lane surface is wide, not elongated --
+# see lane_area_min_area_px instead).
+line_min_aspect_ratio: 3.0
+line_min_length_px: 30.0  # shorter than lane_detector.yaml's 60px on purpose:
+                            # a single SAM3 instance is often just one dash
 
-# masks_to_labels.py: instances (possibly from different prompts) whose
-# masks overlap above this IoU are collapsed to the single highest-scoring
-# one before the final OR-merge.
+# Shape filter for the lane_area prompt -- minimum blob area in pixels
+# (post-ROI-crop, pre-resize) to reject small stray patches that aren't a
+# real lane surface. Not an aspect-ratio filter since a lane region is a
+# wide blob, not a thin line.
+lane_area_min_area_px: 5000
+
+# masks_to_labels.py: same-prompt instances whose masks overlap above this
+# IoU are collapsed to the single highest-scoring one before merging into
+# connected components (avoids near-duplicate SAM3 detections of the same
+# physical line/area inflating blob count).
 iou_dedup_threshold: 0.5
+
+# Expected number of left/right blobs per class after connected-components
+# grouping -- with more than this many, only the largest are kept (by pixel
+# area) and the rest are dropped as noise. Matches "road is 2 lanes" with
+# one line each side, i.e. at most 2 solid-line blobs and 2 lane-area blobs
+# per frame (dashed line contributes a single class regardless of how many
+# dash fragments it merges from -- no cap needed there).
+max_blobs_per_class: 2

@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--prompts", nargs="+",
-        default=["white lane line", "lane line", "road marking", "white line"],
+        default=["solid lane line", "dashed lane line", "road lane"],
     )
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
