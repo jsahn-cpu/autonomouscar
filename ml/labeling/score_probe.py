@@ -8,14 +8,18 @@ being useful) -- see ml/README.md step 2 checklist.
 
 Run inside the `sam3` conda env:
     conda activate sam3
-    python score_probe.py --frames-dir ml/data/raw_frames --session <name> \
-        --prompts "white lane line" "lane line" "road marking"
+    python score_probe.py --frames-dir ml/data/raw_frames --session <name>
+
+Without --prompts this uses whatever's currently in configs/labeling.yaml;
+pass --prompts explicitly to test new candidate wording before committing
+it to the config.
 """
 import argparse
 import pathlib
 import random
 
 import torch
+import yaml
 from PIL import Image
 
 from sam3_utils import autocast_ctx, load_model, make_processor, raw_scores_for_prompt
@@ -36,9 +40,13 @@ def parse_args() -> argparse.Namespace:
         help="How many frames to randomly sample for the probe (default 10 "
              "-- this is meant to be a quick sanity check, not exhaustive).",
     )
+    parser.add_argument("--config", default=str(_REPO_ROOT / "ml" / "configs" / "labeling.yaml"))
     parser.add_argument(
-        "--prompts", nargs="+",
-        default=["solid lane line", "dashed lane line", "road lane"],
+        "--prompts", nargs="+", default=None,
+        help="Prompts to probe. Default: the current prompts in --config "
+             "(labeling.yaml), so this stays in sync automatically as those "
+             "are tuned -- pass this explicitly to try new candidate wording "
+             "without touching the config yet.",
     )
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
@@ -46,6 +54,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.prompts is None:
+        with open(args.config) as f:
+            config = yaml.safe_load(f)
+        args.prompts = list(config["prompts"].values())
     frames_dir = pathlib.Path(args.frames_dir)
     pattern = f"{args.session}_*.png" if args.session else "*.png"
     all_frames = sorted(frames_dir.glob(pattern))
@@ -81,8 +93,8 @@ def main() -> None:
     print(f"\nBest-performing prompt on average: {best_overall!r}")
     print(
         "If these top scores are mostly well below your configured "
-        "confidence_threshold (labeling.yaml, default 0.3), lower it or add "
-        "prompts before running the full label_with_sam3.py batch."
+        "capture_threshold/class_min_score (labeling.yaml), adjust wording "
+        "or thresholds before running the full label_with_sam3.py batch."
     )
 
 
