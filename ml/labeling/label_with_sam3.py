@@ -5,7 +5,7 @@ For every sampled frame, runs every configured prompt through SAM3 and
 dumps each RAW instance mask + its score to disk -- filtering/merging is
 deliberately NOT done here (see masks_to_labels.py) so that threshold/ROI/
 shape-filter tuning never requires re-running SAM3 itself, which is the
-expensive part on a 4GB GPU.
+expensive part.
 
 Run inside the `sam3` conda env:
     conda activate sam3
@@ -14,8 +14,8 @@ Run inside the `sam3` conda env:
 Always run with a small --limit first (e.g. 20-30) to see the printed
 per-frame timing and full-batch estimate before committing to the whole
 session -- see ml/README.md step 2 checklist. Run score_probe.py first if
-this is a new session (different lighting can shift the useful
-confidence_threshold).
+this is a new session/prompt set (different lighting or wording can shift
+the useful capture_threshold).
 """
 import argparse
 import json
@@ -67,7 +67,7 @@ def main() -> None:
     # the text values are sent to SAM3; meta.json is keyed by prompt text,
     # which masks_to_labels.py routes on for its solid/dashed/area handling.
     prompts = list(config["prompts"].values())
-    confidence_threshold = config["confidence_threshold"]
+    capture_threshold = config["capture_threshold"]
 
     frames_dir = pathlib.Path(args.frames_dir)
     pattern = f"{args.session}_*.png" if args.session else "*.png"
@@ -89,14 +89,14 @@ def main() -> None:
 
     print(
         f"Labeling {len(frames)} frames x {len(prompts)} prompts "
-        f"(confidence_threshold={confidence_threshold}) -> {out_dir}"
+        f"(capture_threshold={capture_threshold}) -> {out_dir}"
     )
     if not frames:
         print("Nothing to do.")
         return
 
     model = load_model()
-    processor = make_processor(model, confidence_threshold=confidence_threshold)
+    processor = make_processor(model, confidence_threshold=capture_threshold)
 
     per_frame_times = []
     t_start = time.time()

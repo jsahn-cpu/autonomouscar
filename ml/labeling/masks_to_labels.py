@@ -159,8 +159,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(_REPO_ROOT / "ml" / "configs" / "labeling.yaml"))
     parser.add_argument(
         "--min-score", type=float, default=None,
-        help="Defaults to labeling.yaml's confidence_threshold (i.e. no "
-             "additional filtering beyond what label_with_sam3.py already did).",
+        help="Overrides labeling.yaml's class_min_score for ALL THREE "
+             "classes uniformly (quick global strict/loose test). Default: "
+             "use each class's own value from class_min_score.",
     )
     parser.add_argument(
         "--rejected-frames", default=str(_REPO_ROOT / "ml" / "data" / "rejected_frames.txt"),
@@ -177,7 +178,9 @@ def main() -> None:
     args = parse_args()
     with open(args.config) as f:
         config = yaml.safe_load(f)
-    min_score = args.min_score if args.min_score is not None else config["confidence_threshold"]
+    class_min_score = config["class_min_score"]  # {solid_line, dashed_line, lane_area} -> threshold
+    if args.min_score is not None:
+        class_min_score = {k: args.min_score for k in class_min_score}
     roi_top_ratio = config["roi_top_ratio"]
     line_min_aspect_ratio = config["line_min_aspect_ratio"]
     line_min_length_px = config["line_min_length_px"]
@@ -198,16 +201,16 @@ def main() -> None:
         print(f"Excluding {len(rejected)} hand-rejected frames from {rejected_path}")
 
     frame_dirs = sorted(d for d in raw_dir.iterdir() if d.is_dir() and d.name not in rejected)
-    print(f"Processing {len(frame_dirs)} frames (min_score={min_score}, roi_top_ratio={roi_top_ratio})")
+    print(f"Processing {len(frame_dirs)} frames (class_min_score={class_min_score}, roi_top_ratio={roi_top_ratio})")
 
     empty_count = 0
     session_frames: Dict[str, List[str]] = {}
     for frame_dir in frame_dirs:
         frame_id = frame_dir.name
 
-        solid = load_prompt_instances(frame_dir, prompts["solid_line"], min_score)
-        dashed = load_prompt_instances(frame_dir, prompts["dashed_line"], min_score)
-        area = load_prompt_instances(frame_dir, prompts["lane_area"], min_score)
+        solid = load_prompt_instances(frame_dir, prompts["solid_line"], class_min_score["solid_line"])
+        dashed = load_prompt_instances(frame_dir, prompts["dashed_line"], class_min_score["dashed_line"])
+        area = load_prompt_instances(frame_dir, prompts["lane_area"], class_min_score["lane_area"])
 
         solid = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in solid]
         dashed = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in dashed]

@@ -8,9 +8,9 @@
 # much more reliable than hoping a text prompt encodes spatial position.
 
 prompts:
-  solid_line: "solid lane line"     # -> split into left_solid / right_solid by x-position
-  dashed_line: "dashed lane line"   # -> single center_dashed class, no split needed
-  lane_area: "road lane"            # -> split into lane_1 / lane_2 by x-position
+  solid_line: "white solid lane line"   # -> split into left_solid / right_solid by x-position
+  dashed_line: "white dashed lane line" # -> single center_dashed class, no split needed
+  lane_area: "asphalt road lane"        # -> split into lane_1 / lane_2 by x-position
 
 # Class index written into the single-channel label PNG (0 = background).
 # Lines are layered on top of areas at any overlapping pixel (see
@@ -23,13 +23,26 @@ class_ids:
   lane_1: 4
   lane_2: 5
 
-# Applied both as label_with_sam3.py's SAM3-side capture threshold (an
-# instance scoring below this is never even saved) AND as
-# masks_to_labels.py's default --min-score. 0.3 was the highest threshold
-# that still surfaced real dashed-line fragments in manual testing on the
-# old prompt set -- re-run score_probe.py on the new prompts/dataset before
-# trusting this still holds.
-confidence_threshold: 0.3
+# label_with_sam3.py's SAM3-side capture floor (an instance scoring below
+# this is never even saved, regardless of prompt) -- must be <= the lowest
+# value in class_min_score below, since anything captured below its own
+# class's min_score just gets filtered out later for free, but anything
+# never captured at all can only be recovered by re-running SAM3.
+capture_threshold: 0.15
+
+# masks_to_labels.py's default --min-score, per prompt category. Measured
+# via score_probe.py on the color/front-only dataset: solid/dashed lines
+# score much higher ("white solid lane line" max=0.684 mean=0.448,
+# "white dashed lane line" max=0.562 mean=0.338) than the lane-area concept
+# ("asphalt road lane" max=0.543 mean=0.200 -- best of several phrasings
+# tried, area segmentation seems to just be a harder concept for SAM3 than
+# a paint line is). Kept separate per class rather than one global
+# threshold so the area class isn't forced up to a threshold that would
+# throw away most of its (weaker but often still correct) detections.
+class_min_score:
+  solid_line: 0.3
+  dashed_line: 0.3
+  lane_area: 0.15
 
 # masks_to_labels.py only: drop mask pixels above this row fraction
 # (ceiling/walls -- never floor).
