@@ -3,10 +3,11 @@
 No rclpy/ROS dependency -- pairs ml/data/raw_frames/<id>.png (color, see
 ml/labeling/collect_frames.py) with ml/data/labels/<id>.png (single-channel,
 pixel value = class index 0-5, see ml/labeling/masks_to_labels.py and
-labeling.yaml's class_ids) for the frame_ids listed in a splits.json bucket,
-respecting ml/data/rejected_frames.txt as a second, independent check (in
-case it was edited after masks_to_labels.py last ran and splits.json wasn't
-regenerated yet).
+labeling.yaml's class_ids) for the frame_ids listed in a splits.json bucket.
+
+With require_verified=True (train.yaml), restricts the split to frames on
+ml/data/verified_frames.txt -- the hand-approved whitelist written by
+ml/labeling/review_labels_interactive.py.
 """
 import pathlib
 import random
@@ -52,32 +53,28 @@ class LaneSegDataset(Dataset):
         image_size: Tuple[int, int] = (288, 512),  # (H, W)
         augment: bool = False,
         crop_bottom_fraction: float = 1.0,
-        require_reviewed: bool = False,
+        require_verified: bool = False,
     ) -> None:
         data_dir = pathlib.Path(data_dir)
         self.raw_dir = data_dir / "raw_frames"
         self.labels_dir = data_dir / "labels"
-        rejected = load_id_set(data_dir / "rejected_frames.txt")
-        self.frame_ids = [fid for fid in frame_ids if fid not in rejected]
-        dropped_rejected = len(frame_ids) - len(self.frame_ids)
-        if dropped_rejected:
-            print(f"LaneSegDataset: dropped {dropped_rejected} rejected frame(s) from this split")
 
         # Opt-in whitelist mode (see ml/labeling/review_labels_interactive.py)
-        # -- restricts training to frames that have actually been eyeballed
-        # and passed, instead of the default "anything not explicitly
-        # rejected" blacklist. Off by default since review is a slow manual
-        # process that (as of writing) hasn't covered the whole dataset --
-        # only turn this on once reviewed_frames.txt covers enough of the
-        # data that shrinking to just it isn't throwing away most of the set.
-        if require_reviewed:
-            reviewed = load_id_set(data_dir / "reviewed_frames.txt")
-            before = len(self.frame_ids)
-            self.frame_ids = [fid for fid in self.frame_ids if fid in reviewed]
+        # -- restricts training to frames whose label was eyeballed and
+        # approved (verified_frames.txt), dropping everything else. Off by
+        # default since manual review is slow and (as of writing) hasn't
+        # covered the whole dataset -- turning it on before then just
+        # shrinks training to whatever small fraction has been verified.
+        if require_verified:
+            verified = load_id_set(data_dir / "verified_frames.txt")
+            before = len(frame_ids)
+            self.frame_ids = [fid for fid in frame_ids if fid in verified]
             print(
-                f"LaneSegDataset: require_reviewed=True -- kept {len(self.frame_ids)}/{before} "
-                "frames that were actually reviewed (see reviewed_frames.txt)"
+                f"LaneSegDataset: require_verified=True -- kept {len(self.frame_ids)}/{before} "
+                "verified frames (see verified_frames.txt)"
             )
+        else:
+            self.frame_ids = list(frame_ids)
 
         self.image_size = image_size
         self.augment = augment

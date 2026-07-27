@@ -71,10 +71,10 @@ snapshot_every_n_epochs: 5
 num_val_snapshots: 4      # fixed val frames to render input|ground-truth|
                             # prediction snapshots for each time this fires
 
-# Whitelist mode: only train/val on frames that were actually eyeballed and
-# passed via ml/labeling/review_labels_interactive.py (reviewed_frames.txt
-# minus rejected_frames.txt), instead of the default "anything not
-# explicitly rejected". Leave false until manual review actually covers
-# enough of the dataset -- true before that just shrinks training to
-# whatever tiny fraction has been reviewed so far.
-require_reviewed: false
+# Whitelist mode: only train/val on frames whose label was eyeballed and
+# approved via ml/labeling/review_labels_interactive.py (listed in
+# ml/data/verified_frames.txt). Default false uses every frame in the
+# split; leave it false until manual review actually covers enough of the
+# dataset, since true before that shrinks training to whatever small
+# fraction has been verified so far.
+require_verified: false

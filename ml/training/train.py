@@ -101,14 +101,14 @@ def main() -> None:
 
     image_size = tuple(config["image_size"])
     crop_bottom_fraction = config.get("crop_bottom_fraction", 1.0)
-    require_reviewed = config.get("require_reviewed", False)
+    require_verified = config.get("require_verified", False)
     train_ds = LaneSegDataset(
         args.data_dir, splits["train"], image_size=image_size, augment=True,
-        crop_bottom_fraction=crop_bottom_fraction, require_reviewed=require_reviewed,
+        crop_bottom_fraction=crop_bottom_fraction, require_verified=require_verified,
     )
     val_ds = LaneSegDataset(
         args.data_dir, splits["val"], image_size=image_size, augment=False,
-        crop_bottom_fraction=crop_bottom_fraction, require_reviewed=require_reviewed,
+        crop_bottom_fraction=crop_bottom_fraction, require_verified=require_verified,
     )
     print(f"train frames: {len(train_ds)}, val frames: {len(val_ds)}")
     if len(train_ds) == 0 or len(val_ds) == 0:

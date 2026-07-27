@@ -96,9 +96,9 @@ SAM3를 다시 돌리지 않으므로 `labeling.yaml`의 필터 값을 바꿔가
 육안 검수 (선택, 권장):
 ```bash
 python ml/labeling/review_labels_interactive.py --every-n 20
-# 창에서 한 장씩: y=통과, n=거름(rejected_frames.txt에 기록), b=뒤로, q=중단
-# (거름은 파일을 지우지 않고 목록에만 기록 -- masks_to_labels.py와 학습이
-#  둘 다 rejected_frames.txt를 제외함)
+# 창에서 한 장씩: y=검증(verified_frames.txt에 기록), n/s=스킵, b=뒤로, q=중단
+# 검증(통과)한 프레임만 verified_frames.txt(화이트리스트)에 쌓임. 파일은 아무것도
+# 지우지 않음. 학습에서 이 화이트리스트만 쓰려면 train.yaml의 require_verified: true
 ```
 
 ### ④ 경량 모델 학습

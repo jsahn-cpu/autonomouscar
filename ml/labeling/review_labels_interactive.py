@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """Interactive one-key-per-frame label review -- shows each frame+label
-overlay in a window and waits for a single keypress to judge it, and
-records rejects in ml/data/rejected_frames.txt (which masks_to_labels.py
-and the training Dataset both exclude).
+overlay in a window and waits for a single keypress to judge it.
 
-  y / space : pass (frame is fine, just advance)
-  n / r     : reject -- appends this frame_id to rejected_frames.txt. Does
-              NOT delete any files: raw_frames/sam3_raw/labels are all left
-              in place, and the frame is excluded purely by being on the
-              rejected list. (A reject can be undone by removing its line
-              from that file.)
-  b         : back to the previous frame (to undo a misclick within this
-              session -- also un-rejects it if it was just rejected)
+Whitelist model: the meaningful record is ml/data/verified_frames.txt, a
+list of ONLY the frames whose label you eyeballed and approved. Training
+uses that list directly (train.yaml: require_verified) -- anything not on
+it is simply not used. Nothing is ever deleted, and there is no "rejected"
+list: a frame you don't approve just doesn't get added to the whitelist.
+
+  y / space : verify -- add this frame_id to verified_frames.txt (approved)
+  n / s     : skip -- do NOT approve it (and if it was approved earlier,
+              e.g. correcting a misclick after 'b', remove it from the
+              whitelist). Nothing is deleted; the frame just stays off the
+              training whitelist.
+  b         : back to the previous frame (re-judge it; the last decision wins)
   q / ESC   : quit -- progress is saved, rerun later to resume where you left off
+
+ml/data/reviewed_frames.txt separately tracks every frame you've SEEN
+(verified or skipped) purely so a rerun resumes where you left off instead
+of re-showing frames -- it is not used by training, only the whitelist is.
 
 Needs a display (X11/Wayland) -- run this at the machine's own screen, not
 over a headless SSH session without X forwarding.
@@ -41,7 +47,7 @@ _CLASS_COLORS = np.array([
     [180, 0, 180],     # 5 lane_2       (purple)
 ], dtype=np.uint8)
 
-_WINDOW_NAME = "review (y=pass, n=reject, b=back, q=quit)"
+_WINDOW_NAME = "review (y=verify, n/s=skip, b=back, q=quit)"
 _MAX_DISPLAY_DIM = 1280
 
 
@@ -57,8 +63,8 @@ def append_id(path: pathlib.Path, frame_id: str) -> None:
 
 
 def remove_id(path: pathlib.Path, frame_id: str) -> None:
-    """Rewrite `path` without frame_id -- used to un-reject a frame when it's
-    re-judged as pass after a 'b' (back). Order-preserving so the file stays
+    """Rewrite `path` without frame_id -- used to un-verify a frame when it's
+    re-judged as skip after a 'b' (back). Order-preserving so the file stays
     readable/diffable."""
     if not path.exists():
         return
@@ -86,11 +92,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-frames-dir", default=str(_REPO_ROOT / "ml" / "data" / "raw_frames"))
     parser.add_argument("--labels-dir", default=str(_REPO_ROOT / "ml" / "data" / "labels"))
-    parser.add_argument("--rejected-frames", default=str(_REPO_ROOT / "ml" / "data" / "rejected_frames.txt"))
+    parser.add_argument(
+        "--verified-frames", default=str(_REPO_ROOT / "ml" / "data" / "verified_frames.txt"),
+        help="The whitelist -- frame_ids approved (y). Training uses only "
+             "these when train.yaml's require_verified is on.",
+    )
     parser.add_argument(
         "--reviewed-frames", default=str(_REPO_ROOT / "ml" / "data" / "reviewed_frames.txt"),
-        help="Tracks every frame_id already judged (pass OR reject) so a "
-             "rerun skips them and resumes where the last session left off.",
+        help="Tracks every frame_id already SEEN (verified or skipped) so a "
+             "rerun skips them and resumes where the last session left off. "
+             "Not used by training -- only the whitelist is.",
     )
     parser.add_argument(
         "--sample", type=int, default=None,
@@ -115,11 +126,11 @@ def main() -> None:
     args = parse_args()
     raw_dir = pathlib.Path(args.raw_frames_dir)
     labels_dir = pathlib.Path(args.labels_dir)
-    rejected_path = pathlib.Path(args.rejected_frames)
+    verified_path = pathlib.Path(args.verified_frames)
     reviewed_path = pathlib.Path(args.reviewed_frames)
 
     reviewed = set() if args.restart else load_id_set(reviewed_path)
-    rejected = load_id_set(rejected_path)
+    verified = load_id_set(verified_path)
 
     frame_ids = sorted(p.stem for p in labels_dir.glob("*.png") if p.stem not in reviewed)
     if not frame_ids:
@@ -134,12 +145,12 @@ def main() -> None:
         if args.sample is not None:
             frame_ids = frame_ids[: args.sample]
 
-    print(f"{len(frame_ids)} frames queued this session ({len(reviewed)} already reviewed before).")
-    print("y/space=pass  n/r=reject  b=back  q=quit (progress is saved as you go)")
+    print(f"{len(frame_ids)} frames queued this session ({len(reviewed)} already seen before).")
+    print("y/space=verify  n/s=skip  b=back  q=quit (progress is saved as you go)")
 
     cv2.namedWindow(_WINDOW_NAME, cv2.WINDOW_NORMAL)
     idx = 0
-    n_rejected_this_session = 0
+    n_verified_this_session = 0
     while idx < len(frame_ids):
         frame_id = frame_ids[idx]
         frame_path = raw_dir / f"{frame_id}.png"
@@ -158,22 +169,21 @@ def main() -> None:
         elif key == ord('b'):
             idx = max(0, idx - 1)
             continue
-        elif key in (ord('n'), ord('r')):
-            # Record-only: no files deleted -- masks_to_labels.py and the
-            # training Dataset both exclude anything on rejected_frames.txt,
-            # so listing it is enough to keep it out of training.
-            if frame_id not in rejected:
-                append_id(rejected_path, frame_id)
-                rejected.add(frame_id)
-                n_rejected_this_session += 1
         elif key in (ord('y'), ord(' ')):
-            # Pass -- and if this frame was rejected earlier (e.g. a misclick
-            # being corrected after a 'b'), un-reject it so the last decision
-            # wins.
-            if frame_id in rejected:
-                remove_id(rejected_path, frame_id)
-                rejected.discard(frame_id)
-                n_rejected_this_session = max(0, n_rejected_this_session - 1)
+            # Verify -- add to the training whitelist. Nothing else is
+            # touched; frames simply aren't used unless they're on this list.
+            if frame_id not in verified:
+                append_id(verified_path, frame_id)
+                verified.add(frame_id)
+                n_verified_this_session += 1
+        elif key in (ord('n'), ord('s')):
+            # Skip -- leave it OFF the whitelist. If it was verified earlier
+            # (e.g. correcting a misclick after 'b'), un-verify it so the
+            # last decision wins.
+            if frame_id in verified:
+                remove_id(verified_path, frame_id)
+                verified.discard(frame_id)
+                n_verified_this_session = max(0, n_verified_this_session - 1)
         else:
             continue  # unrecognized key -- redo this frame instead of silently advancing
 
@@ -183,8 +193,9 @@ def main() -> None:
         idx += 1
 
     cv2.destroyAllWindows()
-    print(f"\nSession done: {idx} frames judged, {n_rejected_this_session} newly rejected.")
-    print(f"Total reviewed so far: {len(reviewed)}. Rerun anytime to continue.")
+    print(f"\nSession done: {idx} frames judged, {n_verified_this_session} newly verified.")
+    print(f"Total verified (training whitelist): {len(verified)}. "
+          f"Total seen: {len(reviewed)}. Rerun anytime to continue.")
 
 
 if __name__ == "__main__":
