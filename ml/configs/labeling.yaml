@@ -30,18 +30,30 @@ class_ids:
 # never captured at all can only be recovered by re-running SAM3.
 capture_threshold: 0.15
 
-# masks_to_labels.py's default --min-score, per prompt category. Measured
-# via score_probe.py on the color/front-only dataset: solid/dashed lines
-# score much higher ("white solid lane line" max=0.684 mean=0.448,
-# "white dashed lane line" max=0.562 mean=0.338) than the lane-area concept
-# ("asphalt road lane" max=0.543 mean=0.200 -- best of several phrasings
-# tried, area segmentation seems to just be a harder concept for SAM3 than
-# a paint line is). Kept separate per class rather than one global
-# threshold so the area class isn't forced up to a threshold that would
-# throw away most of its (weaker but often still correct) detections.
+# masks_to_labels.py's default --min-score, per prompt category. Lowered
+# from a uniform 0.3 after score_distribution.py on the full 36752-frame
+# sam3_raw showed 0.3 was dropping real detections:
+#   - dashed_line: at 0.3, 36% of frames (10971/30577) lost their dashed
+#     line ENTIRELY -- and dashed is the boundary the lane_1/lane_2 split
+#     is built on (see masks_to_labels.py), so losing it silently reverts
+#     that frame to the image-center fallback. ~0.20 keeps the best dashed
+#     instance in ~90% of frames, so 0.20 it is.
+#   - solid_line: 86% of frames kept their best solid at 0.3, but the
+#     SECOND solid line (left vs right) often sat in the 0.25-0.30 gap and
+#     got dropped, leaving only one side labeled. Lowered to 0.25 -- but
+#     kept above dashed since solid lines are the ones most easily confused
+#     with parking-lot lines, so being less permissive here limits those
+#     false positives.
+#   - lane_area: left at the 0.15 floor -- score_distribution showed only
+#     39% of frames detect asphalt AT ALL, and nothing is captured below
+#     0.15 to recover, so this is a SAM3/prompt limitation, not a threshold
+#     one (lowering can't help). Needs a separate prompt/detection fix.
+# After changing these, rerun masks_to_labels.py (free, no SAM3 rerun) and
+# eyeball the result -- lower thresholds trade recall for more false
+# positives (esp. solid vs. parking lines).
 class_min_score:
-  solid_line: 0.3
-  dashed_line: 0.3
+  solid_line: 0.25
+  dashed_line: 0.20
   lane_area: 0.15
 
 # masks_to_labels.py only: drop mask pixels above this row fraction
