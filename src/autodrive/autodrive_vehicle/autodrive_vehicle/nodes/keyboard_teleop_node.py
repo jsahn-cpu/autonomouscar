@@ -95,17 +95,40 @@ class KeyboardTeleopNode(Node):
         self._armed = False
         self._throttle_pwm = 0
         self._quit = False
+        self._last_ack = ''
 
         period_sec = 1.0 / publish_rate_hz if publish_rate_hz > 0.0 else 0.05
         self._timer = self.create_timer(period_sec, self._on_timer)
 
         self.get_logger().info('keyboard_teleop_node started')
 
+    def _drain_acks_locked(self) -> None:
+        """Print anything the Arduino wrote back, so it's possible to tell
+        'command reached the firmware but the motor didn't move' (a wiring/
+        power problem) apart from 'command never reached the firmware' (a
+        serial/port problem) -- writes alone can't distinguish those.
+        Dedups identical consecutive OK lines so the throttle ack (sent
+        every timer tick) doesn't spam the terminal; ERR lines always print.
+        Caller must already hold self._lock (see its call sites) -- all
+        self._driver I/O is serialized through that lock since the timer
+        (main thread) and handle_key (key-reading thread) would otherwise
+        touch the same pyserial object concurrently."""
+        while True:
+            raw = self._driver.read()
+            if raw is None:
+                return
+            parsed = self._protocol.decode(raw)
+            if parsed is None:
+                continue
+            if not parsed['ok'] or parsed['raw'] != self._last_ack:
+                print(f"\r[arduino] {parsed['raw']}\r")
+            self._last_ack = parsed['raw']
+
     def _on_timer(self) -> None:
         with self._lock:
             throttle_pwm = self._throttle_pwm if self._armed else 0
-        command = DriveCommand(throttle_pwm=throttle_pwm)
-        self._driver.write(self._protocol.encode_drive(command))
+            self._driver.write(self._protocol.encode_drive(DriveCommand(throttle_pwm=throttle_pwm)))
+            self._drain_acks_locked()
 
     def handle_key(self, key: str) -> None:
         with self._lock:
@@ -135,6 +158,7 @@ class KeyboardTeleopNode(Node):
                     steer_pwm=sign * self._steer_step, duration_ms=self._steer_pulse_duration_ms)
                 self._driver.write(self._protocol.encode_steer_pulse(pulse))
                 print(f'\rsteer pulse {pulse.steer_pwm} for {pulse.duration_ms}ms\r')
+                self._drain_acks_locked()
                 return
             else:
                 return

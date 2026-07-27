@@ -33,17 +33,21 @@
  * steering angle over time.
  */
 
-const int L_PWM = 2;
-const int L_IN1 = 22;
-const int L_IN2 = 23;
+// Corrected 2026-07-27 against the actual wiring -- the L/STEER/R pin
+// assignments were rotated (each one pointed at a different physical
+// motor than its name said), confirmed by commanding one motor at a time
+// on the real vehicle and observing which one actually moved.
+const int L_PWM = 4;
+const int L_IN1 = 26;
+const int L_IN2 = 27;
 
-const int STEER_PWM = 3;
-const int STEER_IN1 = 24;
-const int STEER_IN2 = 25;
+const int STEER_PWM = 2;
+const int STEER_IN1 = 22;
+const int STEER_IN2 = 23;
 
-const int R_PWM = 4;
-const int R_IN1 = 26;
-const int R_IN2 = 27;
+const int R_PWM = 3;
+const int R_IN1 = 24;
+const int R_IN2 = 25;
 
 // Safety limits -- enforced here regardless of what the ROS side sends.
 // TODO: confirm safe values once the drive/steering motors are characterized.
