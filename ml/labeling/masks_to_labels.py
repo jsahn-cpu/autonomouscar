@@ -209,13 +209,19 @@ def fit_dashed_boundary(dashed_mask: np.ndarray, min_rows: int = 5) -> Optional[
     ys, xs = np.nonzero(dashed_mask)
     if ys.size == 0:
         return None
-    row_to_xs: Dict[int, List[int]] = {}
-    for y, x in zip(ys.tolist(), xs.tolist()):
-        row_to_xs.setdefault(y, []).append(x)
-    if len(row_to_xs) < min_rows:
+    # Vectorized per-row centroid (sum of x / count of x per row index) via
+    # bincount instead of a Python-level per-pixel loop -- this runs once
+    # per frame across the full dataset (tens of thousands of frames), and
+    # a real 1920x1080 dashed mask can have thousands of pixels, so a pure-
+    # Python loop here was a measurable slowdown.
+    num_rows = dashed_mask.shape[0]
+    row_sum = np.bincount(ys, weights=xs.astype(np.float64), minlength=num_rows)
+    row_count = np.bincount(ys, minlength=num_rows)
+    valid = row_count > 0
+    if valid.sum() < min_rows:
         return None
-    rows = np.array(sorted(row_to_xs))
-    centroids = np.array([sum(row_to_xs[r]) / len(row_to_xs[r]) for r in rows])
+    rows = np.nonzero(valid)[0]
+    centroids = row_sum[valid] / row_count[valid]
     coeffs = np.polyfit(rows, centroids, deg=1)
     return np.poly1d(coeffs)
 
