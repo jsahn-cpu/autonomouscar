@@ -120,8 +120,15 @@ class CameraNode(Node):
             if self._publish_mono else None
         )
 
-        period_sec = 1.0 / publish_rate_hz if publish_rate_hz > 0.0 else 1.0
-        self._timer = self.create_timer(period_sec, self._on_timer)
+        # Fire the read timer FASTER than the camera's frame rate (2x) so the
+        # blocking cap.read() is what actually paces the loop. A timer exactly
+        # AT the frame rate leaves no margin for the callback's own work
+        # (publish, etc.), so the driver buffer slowly backs up and the
+        # observed rate drifts down over time (measured: starts ~30, decays).
+        # read() blocks until the next frame regardless, so the extra timer
+        # wakeups are cheap and just keep the buffer drained.
+        read_rate_hz = publish_rate_hz * 2.0 if publish_rate_hz > 0.0 else 60.0
+        self._timer = self.create_timer(1.0 / read_rate_hz, self._on_timer)
 
         self.get_logger().info(f'camera_node started (camera_name={camera_name})')
 
