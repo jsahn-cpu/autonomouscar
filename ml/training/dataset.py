@@ -17,6 +17,17 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+# Class indices are LEFT/RIGHT-POSITIONAL (see labeling.yaml's class_ids:
+# 1=left_solid, 2=center_dashed, 3=right_solid, 4=lane_1, 5=lane_2, where
+# lane_1/lane_2 are also just left/right of the dashed line -- see
+# masks_to_labels.py). A horizontal flip augmentation swaps which physical
+# side of the frame everything is on, so it must ALSO swap these class
+# VALUES (1<->3, 4<->5, 2 and 0 unchanged) -- flipping the pixel array
+# alone silently mislabels the flipped half of every flipped sample (the
+# physically-right line ends up tagged left_solid), which the model then
+# has to learn as if it were correct. Index i -> class after a flip.
+_FLIP_CLASS_REMAP = np.array([0, 3, 2, 1, 5, 4], dtype=np.uint8)
+
 # cv2 spawns its own internal thread pool for ops like resize/warpAffine by
 # default. Inside a DataLoader worker subprocess (num_workers>0) that
 # thread pool gets created PER WORKER, oversubscribing the CPU (N workers x
@@ -69,6 +80,7 @@ class LaneSegDataset(Dataset):
         if random.random() < 0.5:
             image = np.ascontiguousarray(image[:, ::-1])
             label = np.ascontiguousarray(label[:, ::-1])
+            label = _FLIP_CLASS_REMAP[label]
 
         # brightness/contrast/gamma jitter -- directly targets the lighting
         # robustness that motivated moving off adaptiveThreshold in the
