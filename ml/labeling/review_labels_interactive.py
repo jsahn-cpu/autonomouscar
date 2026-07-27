@@ -56,6 +56,16 @@ def append_id(path: pathlib.Path, frame_id: str) -> None:
         f.write(frame_id + "\n")
 
 
+def remove_id(path: pathlib.Path, frame_id: str) -> None:
+    """Rewrite `path` without frame_id -- used to un-reject a frame when it's
+    re-judged as pass after a 'b' (back). Order-preserving so the file stays
+    readable/diffable."""
+    if not path.exists():
+        return
+    kept = [ln for ln in path.read_text().splitlines() if ln.strip() and ln.strip() != frame_id]
+    path.write_text("".join(ln + "\n" for ln in kept))
+
+
 def build_display(frame_path: pathlib.Path, label_path: pathlib.Path, frame_id: str) -> np.ndarray:
     frame_bgr = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
     label = cv2.imread(str(label_path), cv2.IMREAD_GRAYSCALE)
@@ -156,7 +166,15 @@ def main() -> None:
                 append_id(rejected_path, frame_id)
                 rejected.add(frame_id)
                 n_rejected_this_session += 1
-        elif key not in (ord('y'), ord(' ')):
+        elif key in (ord('y'), ord(' ')):
+            # Pass -- and if this frame was rejected earlier (e.g. a misclick
+            # being corrected after a 'b'), un-reject it so the last decision
+            # wins.
+            if frame_id in rejected:
+                remove_id(rejected_path, frame_id)
+                rejected.discard(frame_id)
+                n_rejected_this_session = max(0, n_rejected_this_session - 1)
+        else:
             continue  # unrecognized key -- redo this frame instead of silently advancing
 
         if frame_id not in reviewed:
