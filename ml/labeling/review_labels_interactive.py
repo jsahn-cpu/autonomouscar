@@ -40,11 +40,9 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 # (ml/labeling has no dependency on ml/training).
 _CLASS_COLORS = np.array([
     [0, 0, 0],        # 0 background
-    [0, 0, 255],       # 1 left_solid   (red)
-    [0, 255, 255],     # 2 center_dashed (yellow)
-    [255, 0, 0],       # 3 right_solid  (blue)
-    [0, 180, 0],       # 4 lane_1       (dark green)
-    [180, 0, 180],     # 5 lane_2       (purple)
+    [0, 0, 255],       # 1 solid_line  (red)
+    [0, 255, 255],     # 2 dashed_line (yellow)
+    [0, 180, 0],       # 3 lane_area   (green)
 ], dtype=np.uint8)
 
 _WINDOW_NAME = "review (y=verify, n/s=skip, b=back, q=quit)"

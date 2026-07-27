@@ -15,8 +15,8 @@ image_size: [288, 512]  # [H, W] -- downsized from the source 1080x1920.
 # of each frame before resizing (an ROI-restriction idea considered and
 # shelved for now -- full frame it is). Defaults to 1.0 (no crop) if unset.
 
-num_classes: 6  # background + left_solid/center_dashed/right_solid/lane_1/lane_2
-                 # -- must match labeling.yaml's class_ids (5 classes + bg)
+num_classes: 4  # background + solid_line/dashed_line/lane_area
+                 # -- must match labeling.yaml's class_ids (3 classes + bg)
 
 batch_size: 64  # raised from 12 (which was sized for a 4GB laptop GPU) --
                   # this model is only ~1.6M params, a 3090's 24GB has huge
@@ -37,8 +37,8 @@ amp: true
 # loss curve is visibly unstable, it's not needed by default.
 grad_clip: null
 
-base_channels: 32   # PIDNetLite's width multiplier -- ~1.6-1.7M params at
-                      # num_classes=6 (see pidnet.py's __main__ check)
+base_channels: 32   # PIDNetLite's width multiplier -- ~1.5M params at
+                      # num_classes=4 (see pidnet.py's __main__ check)
 aux_weight: 0.4      # deep-supervision loss weight on the I/context
                        # branch's own (lower-res) prediction
 boundary_weight: 20.0  # boundary BCE weight -- kept high since boundary
@@ -53,10 +53,10 @@ dice_weight: 0.5   # and inside val_criterion, which is always plain
                      # for cross-run comparability)
 
 # Optional per-class weight for the cross-entropy term, index-matched to
-# class_ids (0=background..5=lane_2). Left unset (null) to start --
-# background dominates pixel count but Dice already counterweights that;
-# only add this if a specific class (e.g. center_dashed, thinnest/rarest)
-# is visibly underperforming in val snapshots/per-class IoU.
+# class_ids (0=background, 1=solid, 2=dashed, 3=lane_area). Left unset
+# (null) to start -- background dominates pixel count but Dice already
+# counterweights that; only add this if a specific class (e.g. the thin
+# dashed line) is visibly underperforming in val snapshots/per-class IoU.
 class_weights: null
 
 num_workers: 12  # raised from 8 -- each train sample does a cv2 resize +

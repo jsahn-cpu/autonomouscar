@@ -25,10 +25,10 @@ targets --
     is, trust detail more.
 
 Input is 3-channel color (see ml/labeling/collect_frames.py) and output is
-`num_classes` logit channels (background + left_solid/center_dashed/
-right_solid/lane_1/lane_2, see labeling.yaml's class_ids) -- softmax +
-cross-entropy at training time, argmax at inference, unlike the earlier
-single-class binary version this replaces.
+`num_classes` logit channels (background + solid_line/dashed_line/lane_area,
+see labeling.yaml's class_ids) -- softmax + cross-entropy at training time,
+argmax at inference, unlike the earlier single-class binary version this
+replaces.
 """
 import torch
 import torch.nn as nn
@@ -84,7 +84,7 @@ class LitePAPPM(nn.Module):
 
 
 class PIDNetLite(nn.Module):
-    def __init__(self, in_channels: int = 3, num_classes: int = 6, base_channels: int = 32) -> None:
+    def __init__(self, in_channels: int = 3, num_classes: int = 4, base_channels: int = 32) -> None:
         super().__init__()
         c = base_channels
 
