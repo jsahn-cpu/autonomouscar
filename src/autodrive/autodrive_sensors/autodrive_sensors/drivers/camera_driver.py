@@ -18,10 +18,21 @@ class CameraDriver:
         width: int = 1920,
         height: int = 1080,
         buffer_size: int = 4,
+        passthrough: bool = False,
     ) -> None:
         self._device = device
         self._width = width
         self._height = height
+        # Passthrough: the C920 already streams MJPG (= JPEG frames) over USB,
+        # so decoding each frame to BGR just to re-encode it back to JPEG for
+        # the CompressedImage topic is pure waste -- it's what dropped a real
+        # 30fps MJPG stream (measured via v4l2-ctl) to ~10fps in the node,
+        # and double-JPEG-compresses the image. With passthrough on we set
+        # CAP_PROP_CONVERT_RGB=0 so read() hands back the raw JPEG bytes,
+        # which read_jpeg() republishes as-is (no decode, no re-encode). The
+        # tradeoff: no BGR frame is available, so the grayscale/mono topic
+        # can't be produced in this mode.
+        self._passthrough = passthrough
         # OpenCV's own default is already 4 on most backends, but that's
         # undocumented/backend-dependent -- set it explicitly rather than
         # rely on it, since a driver buffer of 1 leaves no slot to receive
@@ -46,6 +57,10 @@ class CameraDriver:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, self._buffer_size)
+        if self._passthrough:
+            # Hand back the raw MJPG/JPEG bytes on read() instead of a
+            # decoded BGR frame -- see __init__.
+            cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
 
         self._is_open = cap.isOpened()
         self._cap = cap if self._is_open else None
@@ -92,11 +107,25 @@ class CameraDriver:
         return self._exposure_fix_ok
 
     def read_frame(self) -> Optional[Any]:
-        """Read a single BGR frame from the camera, or None on failure."""
+        """Read a single BGR frame from the camera, or None on failure.
+        Only valid when passthrough is off (otherwise read() returns raw
+        JPEG bytes, not a BGR image -- use read_jpeg())."""
         if not self._is_open or self._cap is None:
             return None
         ok, frame = self._cap.read()
         return frame if ok else None
+
+    def read_jpeg(self) -> Optional[bytes]:
+        """Read one raw JPEG (MJPG) frame's bytes for passthrough mode, or
+        None on failure. Requires passthrough=True (CAP_PROP_CONVERT_RGB=0);
+        read() then yields the encoded buffer as a 1xN uint8 array, which we
+        flatten to bytes and republish untouched."""
+        if not self._is_open or self._cap is None:
+            return None
+        ok, buf = self._cap.read()
+        if not ok or buf is None:
+            return None
+        return buf.tobytes()
 
     def close(self) -> None:
         """Release the camera device."""

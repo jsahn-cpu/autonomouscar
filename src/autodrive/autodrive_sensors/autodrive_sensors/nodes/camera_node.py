@@ -64,16 +64,32 @@ class CameraNode(Node):
         self.declare_parameter('image_height', 1080)
         self.declare_parameter('camera_info_file', '')
         self.declare_parameter('publish_mono', False)
+        # Republish the camera's MJPG frames straight to the compressed topic
+        # with no decode+re-encode (see CameraDriver's passthrough). Much
+        # faster (a real 30fps MJPG stream drops to ~10fps through the
+        # decode/encode path) and no double-JPEG quality loss. Off by default
+        # since it makes NO decoded BGR frame available -- so publish_mono
+        # can't work with it, and any in-process consumer needing raw pixels
+        # would have to decode the compressed topic itself.
+        self.declare_parameter('passthrough', False)
 
         camera_name: str = self.get_parameter('camera_name').get_parameter_value().string_value
         self._frame_id: str = self.get_parameter('frame_id').get_parameter_value().string_value
         self._publish_mono: bool = self.get_parameter('publish_mono').get_parameter_value().bool_value
+        self._passthrough: bool = self.get_parameter('passthrough').get_parameter_value().bool_value
         publish_rate_hz: float = self.get_parameter('publish_rate_hz').get_parameter_value().double_value
         width = self.get_parameter('image_width').get_parameter_value().integer_value
         height = self.get_parameter('image_height').get_parameter_value().integer_value
 
+        if self._passthrough and self._publish_mono:
+            self.get_logger().warn(
+                'passthrough=true has no decoded frame to build the mono topic from '
+                '-- disabling publish_mono.')
+            self._publish_mono = False
+
         self._device: str = self.get_parameter('device').get_parameter_value().string_value
-        self._driver = CameraDriver(device=self._device or None, width=width, height=height)
+        self._driver = CameraDriver(
+            device=self._device or None, width=width, height=height, passthrough=self._passthrough)
         self._open_and_check_driver()
 
         # Consecutive read_frame() failures (USB disconnect/protocol error,
@@ -124,26 +140,50 @@ class CameraNode(Node):
                 'missing, wrong device, or camera does not support the control) -- frame rate may '
                 'silently drop below publish_rate_hz in dim lighting.')
 
+    def _handle_read_failure(self) -> None:
+        """Count a failed read; after enough in a row, close+reopen the
+        device (recovers from a USB drop the OS has since re-enumerated)."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self._reconnect_failure_threshold:
+            self.get_logger().error(
+                f'Camera "{self._device}": {self._consecutive_failures} consecutive read '
+                'failures -- reopening device.')
+            self._driver.close()
+            self._open_and_check_driver()
+            self._consecutive_failures = 0
+
     def _on_timer(self) -> None:
         """Capture a frame and publish it as a CompressedImage + CameraInfo."""
+        stamp = self.get_clock().now().to_msg()
+
+        if self._passthrough:
+            # Republish the camera's own JPEG bytes directly -- no decode, no
+            # re-encode, no mono (see the passthrough param).
+            jpeg = self._driver.read_jpeg()
+            if jpeg is None:
+                self._handle_read_failure()
+                return
+            self._consecutive_failures = 0
+            image_msg = CompressedImage()
+            image_msg.header.stamp = stamp
+            image_msg.header.frame_id = self._frame_id
+            image_msg.format = 'jpeg'
+            image_msg.data = jpeg
+            self._image_pub.publish(image_msg)
+            if self._camera_info is not None:
+                self._camera_info.header.stamp = stamp
+                self._camera_info_pub.publish(self._camera_info)
+            return
+
         frame = self._driver.read_frame()
         if frame is None:
-            self._consecutive_failures += 1
-            if self._consecutive_failures >= self._reconnect_failure_threshold:
-                self.get_logger().error(
-                    f'Camera "{self._device}": {self._consecutive_failures} consecutive read '
-                    'failures -- reopening device.')
-                self._driver.close()
-                self._open_and_check_driver()
-                self._consecutive_failures = 0
+            self._handle_read_failure()
             return
         self._consecutive_failures = 0
 
         ok, encoded = cv2.imencode('.jpg', frame)
         if not ok:
             return
-
-        stamp = self.get_clock().now().to_msg()
 
         image_msg = CompressedImage()
         image_msg.header.stamp = stamp
