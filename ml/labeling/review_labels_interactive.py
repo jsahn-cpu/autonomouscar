@@ -1,38 +1,36 @@
 #!/usr/bin/env python3
 """Interactive one-key-per-frame label review -- shows each frame+label
-overlay in a window and waits for a single keypress to judge it, instead
-of eyeballing review_labels.py's static contact sheets and hand-typing
-frame_ids into rejected_frames.txt.
+overlay in a window and waits for a single keypress to judge it, and
+records rejects in ml/data/rejected_frames.txt (which masks_to_labels.py
+and the training Dataset both exclude).
 
   y / space : pass (frame is fine, just advance)
-  n / r     : reject -- appends this frame_id to rejected_frames.txt AND
-              deletes ml/data/sam3_raw/<frame_id>/ and ml/data/labels/
-              <frame_id>.png (raw_frames/<frame_id>.png is NOT deleted --
-              only the SAM3/label artifacts, so a rejection can still be
-              regenerated from scratch later by rerunning label_with_sam3.py
-              on that one frame if reconsidered)
-  b         : back to the previous frame (to undo a misclick -- does NOT
-              restore an already-deleted reject, see above)
+  n / r     : reject -- appends this frame_id to rejected_frames.txt. Does
+              NOT delete any files: raw_frames/sam3_raw/labels are all left
+              in place, and the frame is excluded purely by being on the
+              rejected list. (A reject can be undone by removing its line
+              from that file.)
+  b         : back to the previous frame (to undo a misclick within this
+              session -- also un-rejects it if it was just rejected)
   q / ESC   : quit -- progress is saved, rerun later to resume where you left off
 
 Needs a display (X11/Wayland) -- run this at the machine's own screen, not
 over a headless SSH session without X forwarding.
 
     python review_labels_interactive.py
-    python review_labels_interactive.py --sample 500   # cap the session length
-    python review_labels_interactive.py --restart       # ignore prior progress
+    python review_labels_interactive.py --every-n 20     # spot-check every 20th frame
+    python review_labels_interactive.py --restart        # ignore prior progress
 """
 import argparse
 import pathlib
 import random
-import shutil
 
 import cv2
 import numpy as np
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-# Same table as review_labels.py/train.py -- duplicated for the same reason
+# Same table as train.py -- duplicated for the same reason
 # (ml/labeling has no dependency on ml/training).
 _CLASS_COLORS = np.array([
     [0, 0, 0],        # 0 background
@@ -78,7 +76,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-frames-dir", default=str(_REPO_ROOT / "ml" / "data" / "raw_frames"))
     parser.add_argument("--labels-dir", default=str(_REPO_ROOT / "ml" / "data" / "labels"))
-    parser.add_argument("--sam3-raw-dir", default=str(_REPO_ROOT / "ml" / "data" / "sam3_raw"))
     parser.add_argument("--rejected-frames", default=str(_REPO_ROOT / "ml" / "data" / "rejected_frames.txt"))
     parser.add_argument(
         "--reviewed-frames", default=str(_REPO_ROOT / "ml" / "data" / "reviewed_frames.txt"),
@@ -108,7 +105,6 @@ def main() -> None:
     args = parse_args()
     raw_dir = pathlib.Path(args.raw_frames_dir)
     labels_dir = pathlib.Path(args.labels_dir)
-    sam3_raw_dir = pathlib.Path(args.sam3_raw_dir)
     rejected_path = pathlib.Path(args.rejected_frames)
     reviewed_path = pathlib.Path(args.reviewed_frames)
 
@@ -153,15 +149,13 @@ def main() -> None:
             idx = max(0, idx - 1)
             continue
         elif key in (ord('n'), ord('r')):
+            # Record-only: no files deleted -- masks_to_labels.py and the
+            # training Dataset both exclude anything on rejected_frames.txt,
+            # so listing it is enough to keep it out of training.
             if frame_id not in rejected:
                 append_id(rejected_path, frame_id)
                 rejected.add(frame_id)
                 n_rejected_this_session += 1
-            if label_path.exists():
-                label_path.unlink()
-            frame_sam3_dir = sam3_raw_dir / frame_id
-            if frame_sam3_dir.exists():
-                shutil.rmtree(frame_sam3_dir)
         elif key not in (ord('y'), ord(' ')):
             continue  # unrecognized key -- redo this frame instead of silently advancing
 

@@ -95,17 +95,16 @@ SAM3를 다시 돌리지 않으므로 `labeling.yaml`의 필터 값을 바꿔가
 
 육안 검수 (선택, 권장):
 ```bash
-python ml/labeling/review_labels.py
-# ml/data/review/sheet_*.png 를 이미지 뷰어로 훑어보고
-# 나쁜 프레임의 frame_id를 ml/data/rejected_frames.txt에 한 줄씩 기입
-python ml/labeling/masks_to_labels.py   # rejected_frames.txt 반영해서 재실행
+python ml/labeling/review_labels_interactive.py --every-n 20
+# 창에서 한 장씩: y=통과, n=거름(rejected_frames.txt에 기록), b=뒤로, q=중단
+# (거름은 파일을 지우지 않고 목록에만 기록 -- masks_to_labels.py와 학습이
+#  둘 다 rejected_frames.txt를 제외함)
 ```
 
 ### ④ 경량 모델 학습
 
 ```bash
-python ml/training/train.py --exp-name <실험명>                                      # TinyUNet (기본)
-python ml/training/train.py --exp-name <실험명> --config ../configs/train_pidnet.yaml  # PIDNetLite
+python ml/training/train.py --exp-name <실험명>   # PIDNetLite (configs/train.yaml)
 ```
 - Best checkpoint: `ml/runs/<실험명>/best.pt` (어떤 아키텍처로 학습했는지도 체크포인트 안에 같이 저장됨 -- 로드하는 쪽에서 따로 지정할 필요 없음)
 - 정성적 확인용 스냅샷(입력|SAM3 라벨|모델 예측 나란히): `ml/runs/<실험명>/val_samples/epoch_*.png`

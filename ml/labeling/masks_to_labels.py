@@ -52,14 +52,25 @@ left/right and lane-1/lane-2 assignment happens HERE instead:
 """
 import argparse
 import json
+import os
 import pathlib
 import random
+import time
+from functools import partial
+from multiprocessing import Pool
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 import yaml
 from PIL import Image
+
+# Each frame is CPU-bound (PNG decode) and processed in its own worker
+# process below; cv2's internal thread pool per worker would oversubscribe
+# the cores (workers x cv2-threads) -- same PyTorch/OpenCV gotcha as
+# ml/training/dataset.py. One thread per process, workers are the only
+# parallelism.
+cv2.setNumThreads(0)
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -249,11 +260,112 @@ def split_area_by_dashed(
     return (left if left.any() else None), (right if right.any() else None)
 
 
+def process_one_frame(frame_dir: pathlib.Path, params: dict) -> Optional[Tuple[str, str, bool]]:
+    """Build and save one frame's label PNG. Fully self-contained (reads
+    only this frame's sam3_raw dir, writes only its own labels/<id>.png) so
+    it can run in a worker process -- see main()'s Pool. Returns
+    (frame_id, session, is_empty), or None if the frame had no instances at
+    all and its shape couldn't even be determined (nothing written)."""
+    frame_id = frame_dir.name
+    labels_dir = pathlib.Path(params["labels_dir"])
+    prompts = params["prompts"]
+    class_min_score = params["class_min_score"]
+    class_ids = params["class_ids"]
+    roi_top_ratio = params["roi_top_ratio"]
+    line_min_aspect_ratio = params["line_min_aspect_ratio"]
+    line_min_length_px = params["line_min_length_px"]
+    lane_area_min_area_px = params["lane_area_min_area_px"]
+    iou_dedup_threshold = params["iou_dedup_threshold"]
+    max_blobs_per_class = params["max_blobs_per_class"]
+
+    solid = load_prompt_instances(frame_dir, prompts["solid_line"], class_min_score["solid_line"])
+    dashed = load_prompt_instances(frame_dir, prompts["dashed_line"], class_min_score["dashed_line"])
+    area = load_prompt_instances(frame_dir, prompts["lane_area"], class_min_score["lane_area"])
+
+    solid = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in solid]
+    dashed = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in dashed]
+    area = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in area]
+
+    solid = [(m, s) for m, s in solid if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
+    dashed = [(m, s) for m, s in dashed if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
+    area = [(m, s) for m, s in area if passes_area_filter(m, lane_area_min_area_px)]
+
+    solid = dedup_by_iou(solid, iou_dedup_threshold)
+    dashed = dedup_by_iou(dashed, iou_dedup_threshold)
+    area = dedup_by_iou(area, iou_dedup_threshold)
+
+    is_empty = False
+    if not (solid or dashed or area):
+        is_empty = True
+        shape = any_mask_shape(frame_dir)
+        if shape is None:
+            return None  # nothing to write, shape unknown -- caller counts as skipped
+        label = np.zeros(shape, dtype=np.uint8)
+    else:
+        shape = (solid or dashed or area)[0][0].shape
+        image_width = shape[1]
+
+        solid_merged = merge_masks(solid, shape)
+        dashed_merged = merge_masks(dashed, shape)
+        area_merged = merge_masks(area, shape)
+
+        # Left/right for BOTH solid lines and lane areas is decided
+        # relative to the dashed line's own fitted curve, not a fixed
+        # image-center column (see classify_left_right's docstring -- a
+        # fixed column is wrong on a curve or a frame skewed toward one
+        # side, e.g. near a corner/parking area). Falls back to a constant
+        # image-center function only if the dashed line itself wasn't
+        # detected in this frame.
+        #
+        # Fit the curve from dashed pixels that DON'T overlap solid_merged
+        # -- when SAM3's dashed prompt weakly fires on solid-line pixels
+        # (the same confusion that motivated solid beating dashed in the
+        # paint order below), those pixels would otherwise pull the fitted
+        # curve toward the solid line's own position instead of the real
+        # dashed line's, which can flip the solid line's own left/right
+        # classification against a curve that's partly fit from itself.
+        dashed_boundary = fit_dashed_boundary(dashed_merged & ~solid_merged)
+        boundary = dashed_boundary if dashed_boundary is not None else np.poly1d([image_width / 2])
+
+        left_solid, right_solid = classify_left_right(blobs_by_area(solid_merged, max_blobs_per_class), boundary)
+
+        if dashed_boundary is not None:
+            lane_1, lane_2 = split_area_by_dashed(area_merged, dashed_boundary)
+        else:
+            lane_1, lane_2 = classify_left_right(blobs_by_area(area_merged, max_blobs_per_class), boundary)
+
+        # Order matters: area classes first, then center_dashed, then
+        # left_solid/right_solid last -- so line classes still beat area
+        # classes everywhere, but solid also beats dashed at any overlap
+        # between the two (see module docstring point 5).
+        label = np.zeros(shape, dtype=np.uint8)
+        if lane_1 is not None:
+            label[lane_1] = class_ids["lane_1"]
+        if lane_2 is not None:
+            label[lane_2] = class_ids["lane_2"]
+        if dashed_merged.any():
+            label[dashed_merged] = class_ids["center_dashed"]
+        if left_solid is not None:
+            label[left_solid] = class_ids["left_solid"]
+        if right_solid is not None:
+            label[right_solid] = class_ids["right_solid"]
+        if not label.any():
+            is_empty = True
+
+    Image.fromarray(label).save(labels_dir / f"{frame_id}.png")
+    return (frame_id, frame_id_to_session(frame_id), is_empty)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-dir", default=str(_REPO_ROOT / "ml" / "data" / "sam3_raw"))
     parser.add_argument("--labels-dir", default=str(_REPO_ROOT / "ml" / "data" / "labels"))
     parser.add_argument("--config", default=str(_REPO_ROOT / "ml" / "configs" / "labeling.yaml"))
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help="Parallel worker processes (each frame is independent). "
+             "Default: os.cpu_count(). Use 1 for serial/debugging.",
+    )
     parser.add_argument(
         "--min-score", type=float, default=None,
         help="Overrides labeling.yaml's class_min_score for ALL THREE "
@@ -263,7 +375,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rejected-frames", default=str(_REPO_ROOT / "ml" / "data" / "rejected_frames.txt"),
         help="Optional file of frame_ids (one per line) to exclude entirely, "
-             "hand-curated via review_labels.py's contact sheets.",
+             "hand-curated via review_labels_interactive.py.",
     )
     parser.add_argument("--splits-out", default=str(_REPO_ROOT / "ml" / "data" / "splits.json"))
     parser.add_argument("--val-fraction", type=float, default=0.2)
@@ -298,92 +410,63 @@ def main() -> None:
         print(f"Excluding {len(rejected)} hand-rejected frames from {rejected_path}")
 
     frame_dirs = sorted(d for d in raw_dir.iterdir() if d.is_dir() and d.name not in rejected)
-    print(f"Processing {len(frame_dirs)} frames (class_min_score={class_min_score}, roi_top_ratio={roi_top_ratio})")
+    workers = args.workers if args.workers is not None else (os.cpu_count() or 1)
+    print(f"Processing {len(frame_dirs)} frames with {workers} worker(s) "
+          f"(class_min_score={class_min_score}, roi_top_ratio={roi_top_ratio})")
+
+    params = {
+        "labels_dir": str(labels_dir),
+        "prompts": prompts,
+        "class_min_score": class_min_score,
+        "class_ids": class_ids,
+        "roi_top_ratio": roi_top_ratio,
+        "line_min_aspect_ratio": line_min_aspect_ratio,
+        "line_min_length_px": line_min_length_px,
+        "lane_area_min_area_px": lane_area_min_area_px,
+        "iou_dedup_threshold": iou_dedup_threshold,
+        "max_blobs_per_class": max_blobs_per_class,
+    }
+    worker_fn = partial(process_one_frame, params=params)
 
     empty_count = 0
+    skipped_count = 0
     session_frames: Dict[str, List[str]] = {}
-    for frame_dir in frame_dirs:
-        frame_id = frame_dir.name
-
-        solid = load_prompt_instances(frame_dir, prompts["solid_line"], class_min_score["solid_line"])
-        dashed = load_prompt_instances(frame_dir, prompts["dashed_line"], class_min_score["dashed_line"])
-        area = load_prompt_instances(frame_dir, prompts["lane_area"], class_min_score["lane_area"])
-
-        solid = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in solid]
-        dashed = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in dashed]
-        area = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in area]
-
-        solid = [(m, s) for m, s in solid if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
-        dashed = [(m, s) for m, s in dashed if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
-        area = [(m, s) for m, s in area if passes_area_filter(m, lane_area_min_area_px)]
-
-        solid = dedup_by_iou(solid, iou_dedup_threshold)
-        dashed = dedup_by_iou(dashed, iou_dedup_threshold)
-        area = dedup_by_iou(area, iou_dedup_threshold)
-
-        if not (solid or dashed or area):
-            empty_count += 1
-            shape = any_mask_shape(frame_dir)
-            if shape is None:
-                print(f"  WARNING: {frame_id} has no instances at all (any score) -- skipping, shape unknown")
-                continue
-            label = np.zeros(shape, dtype=np.uint8)
-        else:
-            shape = (solid or dashed or area)[0][0].shape
-            image_width = shape[1]
-
-            solid_merged = merge_masks(solid, shape)
-            dashed_merged = merge_masks(dashed, shape)
-            area_merged = merge_masks(area, shape)
-
-            # Left/right for BOTH solid lines and lane areas is decided
-            # relative to the dashed line's own fitted curve, not a fixed
-            # image-center column (see classify_left_right's docstring --
-            # a fixed column is wrong on a curve or a frame skewed toward
-            # one side, e.g. near a corner/parking area). Falls back to a
-            # constant image-center function only if the dashed line
-            # itself wasn't detected in this frame.
-            #
-            # Fit the curve from dashed pixels that DON'T overlap
-            # solid_merged -- when SAM3's dashed prompt weakly fires on
-            # solid-line pixels (the same confusion that motivated solid
-            # beating dashed in the paint order above), those pixels would
-            # otherwise pull the fitted curve toward the solid line's own
-            # position instead of the real dashed line's, which can flip
-            # the solid line's own left/right classification against a
-            # curve that's partly fit from itself.
-            dashed_boundary = fit_dashed_boundary(dashed_merged & ~solid_merged)
-            boundary = dashed_boundary if dashed_boundary is not None else np.poly1d([image_width / 2])
-
-            left_solid, right_solid = classify_left_right(blobs_by_area(solid_merged, max_blobs_per_class), boundary)
-
-            if dashed_boundary is not None:
-                lane_1, lane_2 = split_area_by_dashed(area_merged, dashed_boundary)
-            else:
-                lane_1, lane_2 = classify_left_right(blobs_by_area(area_merged, max_blobs_per_class), boundary)
-
-            # Order matters: area classes first, then center_dashed, then
-            # left_solid/right_solid last -- so line classes still beat
-            # area classes everywhere, but solid also beats dashed at any
-            # overlap between the two (see module docstring point 5).
-            label = np.zeros(shape, dtype=np.uint8)
-            if lane_1 is not None:
-                label[lane_1] = class_ids["lane_1"]
-            if lane_2 is not None:
-                label[lane_2] = class_ids["lane_2"]
-            if dashed_merged.any():
-                label[dashed_merged] = class_ids["center_dashed"]
-            if left_solid is not None:
-                label[left_solid] = class_ids["left_solid"]
-            if right_solid is not None:
-                label[right_solid] = class_ids["right_solid"]
-            if not label.any():
-                empty_count += 1
-
-        Image.fromarray(label).save(labels_dir / f"{frame_id}.png")
-        session_frames.setdefault(frame_id_to_session(frame_id), []).append(frame_id)
-
     total = len(frame_dirs)
+    t0 = time.time()
+
+    def handle_result(result):
+        nonlocal empty_count, skipped_count
+        if result is None:
+            skipped_count += 1
+            return
+        frame_id, session, is_empty = result
+        if is_empty:
+            empty_count += 1
+        session_frames.setdefault(session, []).append(frame_id)
+
+    if workers == 1:
+        results = map(worker_fn, frame_dirs)  # serial, no Pool overhead
+    else:
+        pool = Pool(workers)
+        # chunksize batches frames per worker dispatch -- these are short
+        # tasks, so a chunk amortizes the IPC/pickle overhead per frame.
+        results = pool.imap_unordered(worker_fn, frame_dirs, chunksize=16)
+
+    for i, result in enumerate(results, 1):
+        handle_result(result)
+        if i % 500 == 0 or i == total:
+            elapsed = time.time() - t0
+            rate = i / elapsed if elapsed > 0 else 0
+            eta = (total - i) / rate if rate > 0 else 0
+            print(f"  {i}/{total} ({100*i/total:.1f}%)  {rate:.0f} frames/s  ETA {eta/60:.1f} min",
+                  flush=True)
+
+    if workers != 1:
+        pool.close()
+        pool.join()
+
+    if skipped_count:
+        print(f"Skipped {skipped_count} frames with no instances at all (shape unknown)")
     if total:
         print(f"\nEmpty labels: {empty_count}/{total} ({100*empty_count/total:.1f}%)")
         if empty_count / total > 0.3:
