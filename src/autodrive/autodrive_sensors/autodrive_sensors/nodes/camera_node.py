@@ -72,15 +72,19 @@ class CameraNode(Node):
         width = self.get_parameter('image_width').get_parameter_value().integer_value
         height = self.get_parameter('image_height').get_parameter_value().integer_value
 
-        device: str = self.get_parameter('device').get_parameter_value().string_value
-        self._driver = CameraDriver(device=device or None, width=width, height=height)
-        if not self._driver.open():
-            self.get_logger().error(f'Failed to open camera device: "{device}"')
-        elif not self._driver.format_ok:
-            self.get_logger().error(
-                f'Camera "{device}" did not accept the requested MJPG format -- it is likely '
-                'the wrong device or does not support MJPG at this resolution, and will fall '
-                'back to a raw format at a much lower frame rate than publish_rate_hz.')
+        self._device: str = self.get_parameter('device').get_parameter_value().string_value
+        self._driver = CameraDriver(device=self._device or None, width=width, height=height)
+        self._open_and_check_driver()
+
+        # Consecutive read_frame() failures (USB disconnect/protocol error,
+        # not just an occasional dropped frame) trigger a close+reopen --
+        # without this, a camera that drops off the bus (see camera
+        # stability notes: xHCI errors -> UVC probe -110/-71 -> USB
+        # disconnect) never recovers even after the OS re-enumerates it,
+        # since read_frame() on a dead cv2.VideoCapture just keeps
+        # returning None forever.
+        self._consecutive_failures = 0
+        self._reconnect_failure_threshold = 10
 
         camera_info_file: str = self.get_parameter('camera_info_file').get_parameter_value().string_value
         camera_info_path = ''
@@ -105,11 +109,35 @@ class CameraNode(Node):
 
         self.get_logger().info(f'camera_node started (camera_name={camera_name})')
 
+    def _open_and_check_driver(self) -> None:
+        if not self._driver.open():
+            self.get_logger().error(f'Failed to open camera device: "{self._device}"')
+            return
+        if not self._driver.format_ok:
+            self.get_logger().error(
+                f'Camera "{self._device}" did not accept the requested MJPG format -- it is likely '
+                'the wrong device or does not support MJPG at this resolution, and will fall '
+                'back to a raw format at a much lower frame rate than publish_rate_hz.')
+        if not self._driver.exposure_fix_ok:
+            self.get_logger().warn(
+                f'Camera "{self._device}": could not disable exposure_dynamic_framerate (v4l2-ctl '
+                'missing, wrong device, or camera does not support the control) -- frame rate may '
+                'silently drop below publish_rate_hz in dim lighting.')
+
     def _on_timer(self) -> None:
         """Capture a frame and publish it as a CompressedImage + CameraInfo."""
         frame = self._driver.read_frame()
         if frame is None:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self._reconnect_failure_threshold:
+                self.get_logger().error(
+                    f'Camera "{self._device}": {self._consecutive_failures} consecutive read '
+                    'failures -- reopening device.')
+                self._driver.close()
+                self._open_and_check_driver()
+                self._consecutive_failures = 0
             return
+        self._consecutive_failures = 0
 
         ok, encoded = cv2.imencode('.jpg', frame)
         if not ok:

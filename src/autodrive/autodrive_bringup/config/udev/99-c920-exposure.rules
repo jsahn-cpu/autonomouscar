@@ -1,0 +1,32 @@
+# Reset the Logitech C920's exposure_dynamic_framerate control to 0 on
+# every (re)connect.
+#
+# The camera ships with this control ON (=1) and a replug resets it back
+# to 1 even if it was previously turned off in software -- with it on, the
+# camera lengthens its shutter (instead of raising gain) in dim lighting,
+# which silently drops the actual output below the requested publish rate
+# (e.g. 30fps -> 15fps) in a way that looks identical to a USB bandwidth
+# problem. camera_driver.py also tries to clear this at open() time, but
+# that only covers this node's own process; this rule covers manual
+# v4l2-ctl/other-tool usage and any camera never unplugged since boot.
+#
+# idVendor 046d matches the by-id device path already used in
+# autodrive_bringup/config/camera.yaml. idProduct 082d is the standard C920
+# ID -- verify with `lsusb | grep -i logitech` on the actual vehicle if a
+# camera doesn't respond to this rule (`udevadm test` or check
+# /var/log/syslog for the RUN command's exit status).
+#
+# ID_V4L_CAPABILITIES restricts this to the actual video-capture node --
+# a UVC device like the C920 also exposes a metadata-only node that
+# doesn't support this control and would just fail the RUN command.
+#
+# Install (not wired into colcon's install/ tree -- udev doesn't look
+# there):
+#   sudo install -m 644 src/autodrive/autodrive_bringup/config/udev/99-c920-exposure.rules \
+#     /etc/udev/rules.d/99-c920-exposure.rules
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger --subsystem-match=video4linux
+
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="082d", \
+  ENV{ID_V4L_CAPABILITIES}=="*:capture:*", \
+  RUN+="/usr/bin/v4l2-ctl -d $devnode --set-ctrl exposure_dynamic_framerate=0"
