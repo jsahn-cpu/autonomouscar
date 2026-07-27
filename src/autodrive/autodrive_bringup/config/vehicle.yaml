@@ -37,10 +37,10 @@ keyboard_teleop_node:
     serial_port: "/dev/ttyACM0"    # same value as arduino_bridge_node.serial_port above
     baudrate: 115200
     throttle_step: 20        # PWM units per w/s press
-    max_throttle_pwm: 60      # conservative manual-test ceiling -- raise only
-                                # after confirming this is safe on blocks/low
-                                # speed, independent of max_throttle_pwm above
-                                # (that one's still an unset 0 placeholder)
+    max_throttle_pwm: 120     # manual-drive ceiling (firmware MAX_DRIVE_PWM is
+                                # 180, so still headroom). Low PWM (<=60) wasn't
+                                # enough to overcome the drivetrain's static
+                                # friction -- same issue steering hit.
     steer_step: 150           # PWM units per a/d pulse -- 40 was too weak to
                                 # move the steering motor at all in testing,
                                 # raised well past 100 (firmware ceiling is
