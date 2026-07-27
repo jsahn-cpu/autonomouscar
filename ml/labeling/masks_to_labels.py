@@ -18,18 +18,29 @@ left/right and lane-1/lane-2 assignment happens HERE instead:
      SAM3's frequent oversegmentation (one physical line/curve reported as
      many small overlapping instances, see label_with_sam3.py runs) back
      into one blob per physical line/area.
-  3. left_solid/right_solid: classify each kept blob as left/right purely
-     by whether its centroid sits left or right of the frame's horizontal
-     center -- fine for lines since they don't meaningfully curve within
-     one frame.
-  4. lane_1/lane_2: classified by which side of the DASHED LINE's own
-     fitted curve each pixel falls on (see fit_dashed_boundary/
-     split_area_by_dashed), not a fixed image-center split -- on a curving
-     track the image's horizontal center and the dashed line's actual
-     position drift apart a lot between the near and far field, so a fixed
-     split produces visibly wrong lane_1/lane_2 boundaries in curves. Falls
-     back to the old centroid-vs-image-center method if the dashed line
-     wasn't detected in this frame (too few points to fit a line through).
+  3. left_solid/right_solid AND lane_1/lane_2 are BOTH classified relative
+     to the DASHED LINE's own fitted curve (see fit_dashed_boundary), not
+     a fixed image-center column. A fixed column is wrong whenever the
+     frame is skewed toward one side -- on a curving track, or e.g. near a
+     corner where the camera happens to be pointed toward a parking area:
+     the real second solid line can end up entirely on the "wrong" image
+     half (or off-frame), while something that ISN'T that line (a parking
+     line, say) can land on the expected side purely by image position and
+     get mislabeled as if it were the real thing. Classifying against the
+     dashed line's actual curve instead fixes the split-side-of-what
+     problem -- it does NOT fix SAM3 having detected a non-lane-line
+     object as a solid line in the first place; that's a detection-time
+     failure mode, not a classification-time one, and needs eyeballing
+     labels/tightening prompts to catch.
+     - left_solid/right_solid: each blob's centroid (cx, cy) is compared
+       against boundary(cy) (see classify_left_right).
+     - lane_1/lane_2: split per-PIXEL against the curve (see
+       split_area_by_dashed), not per-blob -- this also correctly handles
+       a single continuous road-surface blob spanning across the dashed
+       line, which a per-blob method can't split at all.
+     Falls back to a constant image-center function for both if the
+     dashed line wasn't detected in this frame at all (too few points to
+     fit a line through).
   5. Compose the final label: lane_1/lane_2 written first, then
      center_dashed, then left_solid/right_solid LAST -- line classes still
      beat area classes everywhere, but solid now beats dashed at any
@@ -133,31 +144,44 @@ def merge_masks(instances: List[Tuple[np.ndarray, float]], shape: Tuple[int, int
     return merged
 
 
-def blobs_by_area(mask: np.ndarray, max_blobs: int) -> List[Tuple[np.ndarray, float]]:
+def blobs_by_area(mask: np.ndarray, max_blobs: int) -> List[Tuple[np.ndarray, float, float]]:
     """Split a merged binary mask into up to max_blobs connected
-    components (largest area first), pairing each with its centroid x --
-    this is what turns SAM3's oversegmented fragments of one physical
-    line/area back into a single blob."""
+    components (largest area first), pairing each with its centroid
+    (cx, cy) -- this is what turns SAM3's oversegmented fragments of one
+    physical line/area back into a single blob."""
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
         mask.astype(np.uint8), connectivity=8
     )
     components = [
-        (labels == i, stats[i, cv2.CC_STAT_AREA], centroids[i][0])
+        (labels == i, stats[i, cv2.CC_STAT_AREA], centroids[i][0], centroids[i][1])
         for i in range(1, num_labels)  # label 0 is background
     ]
     components.sort(key=lambda t: -t[1])
     components = components[:max_blobs]
-    return [(blob_mask, cx) for blob_mask, _, cx in components]
+    return [(blob_mask, cx, cy) for blob_mask, _, cx, cy in components]
 
 
-def classify_left_right(blobs_with_x: List[Tuple[np.ndarray, float]], image_width: int):
+def classify_left_right(blobs: List[Tuple[np.ndarray, float, float]], boundary):
     """Each blob goes to left/right by whether its centroid sits left or
-    right of the frame's horizontal center. blobs_with_x is already
-    area-sorted (largest first, see blobs_by_area), so if two blobs land
-    on the same side only the larger one is kept for that side."""
+    right of `boundary` AT THAT BLOB'S OWN ROW (boundary(cy), not a fixed
+    image-center column) -- on a curving track (or a camera framing skewed
+    toward one side, e.g. near a corner/parking area), a fixed column is
+    wrong: a real solid line can end up entirely on the "wrong" image half,
+    while something in the frame that ISN'T the missing line (a parking
+    line, say) can land on the expected side purely by image position and
+    get mislabeled as if it were the real thing. `boundary` is a callable
+    x=f(y) -- pass a fitted dashed-line curve (see fit_dashed_boundary)
+    when available, or a constant function as a fallback when it isn't.
+    NOTE: this only fixes the left/right SPLIT -- it does not and cannot
+    stop SAM3 from having detected a non-lane-line object as a solid line
+    in the first place; that failure mode needs eyeballing labels/
+    tightening prompts, not a smarter split rule.
+
+    blobs is already area-sorted (largest first, see blobs_by_area), so if
+    two blobs land on the same side only the larger one is kept."""
     left_mask, right_mask = None, None
-    for mask, cx in blobs_with_x:
-        if cx < image_width / 2:
+    for mask, cx, cy in blobs:
+        if cx < boundary(cy):
             if left_mask is None:
                 left_mask = mask
         else:
@@ -300,13 +324,31 @@ def main() -> None:
             dashed_merged = merge_masks(dashed, shape)
             area_merged = merge_masks(area, shape)
 
-            left_solid, right_solid = classify_left_right(blobs_by_area(solid_merged, max_blobs_per_class), image_width)
+            # Left/right for BOTH solid lines and lane areas is decided
+            # relative to the dashed line's own fitted curve, not a fixed
+            # image-center column (see classify_left_right's docstring --
+            # a fixed column is wrong on a curve or a frame skewed toward
+            # one side, e.g. near a corner/parking area). Falls back to a
+            # constant image-center function only if the dashed line
+            # itself wasn't detected in this frame.
+            #
+            # Fit the curve from dashed pixels that DON'T overlap
+            # solid_merged -- when SAM3's dashed prompt weakly fires on
+            # solid-line pixels (the same confusion that motivated solid
+            # beating dashed in the paint order above), those pixels would
+            # otherwise pull the fitted curve toward the solid line's own
+            # position instead of the real dashed line's, which can flip
+            # the solid line's own left/right classification against a
+            # curve that's partly fit from itself.
+            dashed_boundary = fit_dashed_boundary(dashed_merged & ~solid_merged)
+            boundary = dashed_boundary if dashed_boundary is not None else np.poly1d([image_width / 2])
 
-            dashed_boundary = fit_dashed_boundary(dashed_merged)
+            left_solid, right_solid = classify_left_right(blobs_by_area(solid_merged, max_blobs_per_class), boundary)
+
             if dashed_boundary is not None:
                 lane_1, lane_2 = split_area_by_dashed(area_merged, dashed_boundary)
             else:
-                lane_1, lane_2 = classify_left_right(blobs_by_area(area_merged, max_blobs_per_class), image_width)
+                lane_1, lane_2 = classify_left_right(blobs_by_area(area_merged, max_blobs_per_class), boundary)
 
             # Order matters: area classes first, then center_dashed, then
             # left_solid/right_solid last -- so line classes still beat
