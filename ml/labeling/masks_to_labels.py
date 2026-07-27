@@ -83,14 +83,36 @@ def frame_id_to_session(frame_id: str) -> str:
     return parts[0] if len(parts) == 3 else frame_id
 
 
-def load_prompt_instances(frame_dir: pathlib.Path, prompt_text: str, min_score: float) -> List[Tuple[np.ndarray, float]]:
+def _bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+    """(rmin, rmax, cmin, cmax) of True pixels (rmax/cmax exclusive), or None
+    if the mask is empty. Used to skip full-resolution boolean ops on
+    spatially-disjoint masks -- see dedup_by_iou / passes_line_shape_filter."""
+    rows = np.any(mask, axis=1)
+    if not rows.any():
+        return None
+    cols = np.any(mask, axis=0)
+    r = np.where(rows)[0]
+    c = np.where(cols)[0]
+    return int(r[0]), int(r[-1]) + 1, int(c[0]), int(c[-1]) + 1
+
+
+def load_prompt_instances(
+    frame_dir: pathlib.Path, prompt_text: str, min_score: float, roi_top_ratio: float = 0.0
+) -> List[Tuple[np.ndarray, float]]:
     with open(frame_dir / "meta.json") as f:
         meta = json.load(f)
     instances = []
     for inst in meta["prompts"].get(prompt_text, []):
         if inst["score"] < min_score:
             continue
-        mask = np.array(Image.open(frame_dir / inst["mask_file"])) > 0
+        # cv2.imread (grayscale) decodes these mostly-black masks ~1.5x
+        # faster than PIL here, and this is now the per-frame hot path.
+        mask = cv2.imread(str(frame_dir / inst["mask_file"]), cv2.IMREAD_GRAYSCALE) > 0
+        # ROI top crop folded in here (the mask is freshly owned, so this is
+        # in place -- no extra full-frame copy per instance like the old
+        # separate apply_roi_top_crop pass did).
+        if roi_top_ratio > 0:
+            mask[: int(mask.shape[0] * roi_top_ratio), :] = False
         instances.append((mask, inst["score"]))
     return instances
 
@@ -103,20 +125,21 @@ def any_mask_shape(frame_dir: pathlib.Path) -> Optional[Tuple[int, int]]:
         meta = json.load(f)
     for prompt_instances in meta["prompts"].values():
         for inst in prompt_instances:
-            arr = np.array(Image.open(frame_dir / inst["mask_file"]))
+            arr = cv2.imread(str(frame_dir / inst["mask_file"]), cv2.IMREAD_GRAYSCALE)
             return arr.shape
     return None
 
 
-def apply_roi_top_crop(mask: np.ndarray, roi_top_ratio: float) -> np.ndarray:
-    top_row = int(mask.shape[0] * roi_top_ratio)
-    mask = mask.copy()
-    mask[:top_row, :] = False
-    return mask
-
-
 def passes_line_shape_filter(mask: np.ndarray, min_aspect_ratio: float, min_length_px: float) -> bool:
-    mask_u8 = (mask.astype(np.uint8)) * 255
+    # Crop to the mask's bounding box first -- findContours on a full
+    # 1920x1080 mostly-empty frame is far more work than on the small region
+    # the instance actually occupies (the offset doesn't affect the
+    # minAreaRect dimensions we care about).
+    bb = _bbox(mask)
+    if bb is None:
+        return False
+    sub = mask[bb[0]:bb[1], bb[2]:bb[3]]
+    mask_u8 = sub.astype(np.uint8) * 255
     contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return False
@@ -139,12 +162,39 @@ def iou(a: np.ndarray, b: np.ndarray) -> float:
 def dedup_by_iou(
     instances: List[Tuple[np.ndarray, float]], iou_threshold: float
 ) -> List[Tuple[np.ndarray, float]]:
-    instances = sorted(instances, key=lambda t: -t[1])
+    """Keep the highest-scoring of each set of near-duplicate masks (IoU >
+    threshold). The naive version ran `&` and `|` over the full 1920x1080
+    frame for every O(n^2) pair, which dominated runtime once low score
+    thresholds let ~40+ instances through per frame. This precomputes each
+    mask's bounding box + pixel area once and, per pair, first checks
+    whether the boxes even overlap (most line fragments are spatially
+    disjoint -> IoU 0, skipped for free) and otherwise intersects only
+    within the overlapping sub-box, never the whole frame."""
+    order = sorted(range(len(instances)), key=lambda i: -instances[i][1])
     kept: List[Tuple[np.ndarray, float]] = []
-    for mask, score in instances:
-        if any(iou(mask, kept_mask) > iou_threshold for kept_mask, _ in kept):
+    kept_meta: List[Tuple[np.ndarray, Tuple[int, int, int, int], int]] = []
+    for i in order:
+        mask, score = instances[i]
+        bb = _bbox(mask)
+        if bb is None:
             continue
-        kept.append((mask, score))
+        area = int(np.count_nonzero(mask[bb[0]:bb[1], bb[2]:bb[3]]))
+        is_dup = False
+        for kmask, kbb, karea in kept_meta:
+            r0, r1 = max(bb[0], kbb[0]), min(bb[1], kbb[1])
+            c0, c1 = max(bb[2], kbb[2]), min(bb[3], kbb[3])
+            if r0 >= r1 or c0 >= c1:
+                continue  # bounding boxes disjoint -> IoU 0
+            inter = int(np.count_nonzero(mask[r0:r1, c0:c1] & kmask[r0:r1, c0:c1]))
+            if inter == 0:
+                continue
+            union = area + karea - inter
+            if union and inter / union > iou_threshold:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append((mask, score))
+            kept_meta.append((mask, bb, area))
     return kept
 
 
@@ -311,13 +361,11 @@ def process_one_frame(frame_dir: pathlib.Path, params: dict) -> Optional[Tuple[s
     iou_dedup_threshold = params["iou_dedup_threshold"]
     max_blobs_per_class = params["max_blobs_per_class"]
 
-    solid = load_prompt_instances(frame_dir, prompts["solid_line"], class_min_score["solid_line"])
-    dashed = load_prompt_instances(frame_dir, prompts["dashed_line"], class_min_score["dashed_line"])
-    area = load_prompt_instances(frame_dir, prompts["lane_area"], class_min_score["lane_area"])
-
-    solid = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in solid]
-    dashed = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in dashed]
-    area = [(apply_roi_top_crop(m, roi_top_ratio), s) for m, s in area]
+    # ROI top crop is folded into the load (see load_prompt_instances) so
+    # there's no separate full-frame copy per instance.
+    solid = load_prompt_instances(frame_dir, prompts["solid_line"], class_min_score["solid_line"], roi_top_ratio)
+    dashed = load_prompt_instances(frame_dir, prompts["dashed_line"], class_min_score["dashed_line"], roi_top_ratio)
+    area = load_prompt_instances(frame_dir, prompts["lane_area"], class_min_score["lane_area"], roi_top_ratio)
 
     solid = [(m, s) for m, s in solid if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
     dashed = [(m, s) for m, s in dashed if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
