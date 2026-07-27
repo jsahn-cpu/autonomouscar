@@ -1,7 +1,9 @@
 """torch Dataset for the SAM3-auto-labeled lane data (ml/README.md step 4).
 
-No rclpy/ROS dependency -- pairs ml/data/raw_frames/<id>.png with
-ml/data/labels/<id>.png for the frame_ids listed in a splits.json bucket,
+No rclpy/ROS dependency -- pairs ml/data/raw_frames/<id>.png (color, see
+ml/labeling/collect_frames.py) with ml/data/labels/<id>.png (single-channel,
+pixel value = class index 0-5, see ml/labeling/masks_to_labels.py and
+labeling.yaml's class_ids) for the frame_ids listed in a splits.json bucket,
 respecting ml/data/rejected_frames.txt as a second, independent check (in
 case it was edited after masks_to_labels.py last ran and splits.json wasn't
 regenerated yet).
@@ -81,16 +83,23 @@ class LaneSegDataset(Dataset):
         # mild rotation (+-6 deg) -- kept small since a large rotation would
         # no longer resemble the camera's fixed forward-facing mount angle
         angle = random.uniform(-6, 6)
-        h, w = image.shape
+        h, w = image.shape[:2]
         M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
         image = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        label = cv2.warpAffine(label, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
+        # label border fill = 0 (background) -- rotation-exposed corners are
+        # genuinely background, not any real class
+        label = cv2.warpAffine(label, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
         return image, label
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         frame_id = self.frame_ids[idx]
-        image = cv2.imread(str(self.raw_dir / f"{frame_id}.png"), cv2.IMREAD_GRAYSCALE)
+        # BGR, not converted to RGB -- deployment (cv2/ROS Image) will also
+        # hand the model BGR frames, so keeping this consistent end-to-end
+        # avoids a channel-order mismatch bug between training and inference.
+        image = cv2.imread(str(self.raw_dir / f"{frame_id}.png"), cv2.IMREAD_COLOR)
+        # single channel, pixel value = class index (0=background..5) --
+        # NOT a 0/255 mask like the old binary setup, so no thresholding.
         label = cv2.imread(str(self.labels_dir / f"{frame_id}.png"), cv2.IMREAD_GRAYSCALE)
         if image is None or label is None:
             raise FileNotFoundError(f"Missing frame or label for {frame_id!r}")
@@ -108,6 +117,6 @@ class LaneSegDataset(Dataset):
         if self.augment:
             image, label = self._augment(image, label)
 
-        image_t = torch.from_numpy(image).float().unsqueeze(0) / 255.0
-        label_t = (torch.from_numpy(label).float().unsqueeze(0) > 127).float()
+        image_t = torch.from_numpy(image).float().permute(2, 0, 1) / 255.0  # (3,H,W)
+        label_t = torch.from_numpy(label.astype(np.int64))  # (H,W) class indices, for CrossEntropyLoss
         return image_t, label_t

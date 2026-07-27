@@ -1,0 +1,55 @@
+# Config for train.py (and read back by any future compare/deploy tooling
+# via the saved checkpoint's embedded copy of this config, so the two stay
+# in sync automatically -- image_size/base_channels/num_classes must match
+# what a checkpoint was actually trained with).
+#
+# Single candidate architecture: PIDNetLite (pidnet.py) -- see its
+# docstring for why the boundary-aware design was picked directly for this
+# multi-class task (solid vs. dashed, left vs. right, lane_1 vs. lane_2 are
+# all boundary-distinction problems).
+
+image_size: [288, 512]  # [H, W] -- downsized from the source 1080x1920.
+                          # Raise this later only if thin/distant lines are
+                          # visibly lost at this size in val snapshots.
+# crop_bottom_fraction: dataset.py supports cropping to only the bottom N%
+# of each frame before resizing (an ROI-restriction idea considered and
+# shelved for now -- full frame it is). Defaults to 1.0 (no crop) if unset.
+
+num_classes: 6  # background + left_solid/center_dashed/right_solid/lane_1/lane_2
+                 # -- must match labeling.yaml's class_ids (5 classes + bg)
+
+batch_size: 12  # PIDNet has more branches/activations per sample than a
+                  # plain U-Net, and inputs are now 3-channel color (vs. the
+                  # old 1-channel grayscale setup) -- kept conservative to
+                  # stay safe on a 4GB GPU; raise if training on the 3090
+                  # desktop and GPU memory allows.
+epochs: 60
+lr: 0.001
+weight_decay: 0.0001
+
+base_channels: 32   # PIDNetLite's width multiplier -- ~1.6-1.7M params at
+                      # num_classes=6 (see pidnet.py's __main__ check)
+aux_weight: 0.4      # deep-supervision loss weight on the I/context
+                       # branch's own (lower-res) prediction
+boundary_weight: 20.0  # boundary BCE weight -- kept high since boundary
+                       # pixels (see losses.extract_boundary) are a tiny
+                       # minority even within the already-sparse foreground
+                       # mask; too low and the boundary branch just learns
+                       # all-background
+
+ce_weight: 0.5    # weights for the MAIN segmentation loss term (both here
+dice_weight: 0.5   # and inside val_criterion, which is always plain
+                     # CEDice regardless of future architecture changes,
+                     # for cross-run comparability)
+
+# Optional per-class weight for the cross-entropy term, index-matched to
+# class_ids (0=background..5=lane_2). Left unset (null) to start --
+# background dominates pixel count but Dice already counterweights that;
+# only add this if a specific class (e.g. center_dashed, thinnest/rarest)
+# is visibly underperforming in val snapshots/per-class IoU.
+class_weights: null
+
+num_workers: 8
+snapshot_every_n_epochs: 5
+num_val_snapshots: 4      # fixed val frames to render input|ground-truth|
+                            # prediction snapshots for each time this fires
