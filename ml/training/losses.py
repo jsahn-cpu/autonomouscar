@@ -59,6 +59,32 @@ def iou_score(logits: torch.Tensor, targets: torch.Tensor) -> float:
     return sum(ious) / len(ious) if ious else 1.0
 
 
+@torch.no_grad()
+def update_iou_stats(
+    logits: torch.Tensor, targets: torch.Tensor,
+    intersection: torch.Tensor, union: torch.Tensor,
+) -> None:
+    """Accumulate per-class intersection and union IN PLACE across a whole
+    val set, for a dataset-global per-class IoU -- more stable and more
+    informative than iou_score's per-image averaging: a frame with only a
+    few lane pixels no longer counts the same as one full of them, and
+    keeping the classes separate (rather than pre-averaging) is what lets
+    the caller print which specific class is lagging (e.g. right_solid or
+    lane_2, the ones that kept coming out weak). intersection/union are
+    length-num_classes tensors on the same device as logits.
+
+    Global IoU per class c is then intersection[c] / union[c]; mean
+    foreground IoU is the mean of that over classes 1..num_classes-1 with
+    nonzero union."""
+    num_classes = intersection.shape[0]
+    preds = logits.argmax(dim=1)
+    for c in range(num_classes):
+        pred_c = preds == c
+        target_c = targets == c
+        intersection[c] += (pred_c & target_c).sum()
+        union[c] += (pred_c | target_c).sum()
+
+
 def extract_boundary(targets: torch.Tensor, num_classes: int, width: int = 2) -> torch.Tensor:
     """Binary boundary band (any class-to-class edge, not just fg/bg) of a
     (B,H,W) class-index label, via one-hot + per-class dilation-minus-

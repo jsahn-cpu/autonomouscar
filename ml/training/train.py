@@ -19,6 +19,7 @@ import argparse
 import json
 import pathlib
 import shutil
+import time
 
 import cv2
 import numpy as np
@@ -27,7 +28,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from dataset import LaneSegDataset
-from losses import CEDiceLoss, PIDNetLoss, iou_score
+from losses import CEDiceLoss, PIDNetLoss, update_iou_stats
 from pidnet import PIDNetLite
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -43,6 +44,9 @@ _CLASS_COLORS = np.array([
     [180, 0, 180],     # 5 lane_2       (purple)
 ], dtype=np.uint8)
 
+# For the per-class IoU line -- index-matched to class_ids above.
+_CLASS_NAMES = ["bg", "left_solid", "dashed", "right_solid", "lane_1", "lane_2"]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -50,6 +54,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(_REPO_ROOT / "ml" / "configs" / "train.yaml"))
     parser.add_argument("--exp-name", required=True)
     parser.add_argument("--runs-dir", default=str(_REPO_ROOT / "ml" / "runs"))
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume from this exp-name's last.pt (model+optimizer+scheduler"
+             "+epoch), e.g. after an interrupted run, instead of starting fresh.",
+    )
     return parser.parse_args()
 
 
@@ -112,17 +121,28 @@ def main() -> None:
     # more processes alive and idle for the other 95% of the epoch just
     # competes with train_loader's own workers and the main process for
     # the same CPU cores.
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_cuda = device.type == "cuda"
+    # Fixed input size every batch -> let cuDNN autotune the fastest conv
+    # algorithms once instead of re-picking per shape. Pure speed win here.
+    torch.backends.cudnn.benchmark = use_cuda
+
     train_workers = config["num_workers"]
+    # pin_memory + non_blocking .to(device) below overlaps the host->GPU
+    # copy with compute; prefetch_factor keeps each worker a few batches
+    # ahead so the GPU isn't left waiting on the (CPU-bound) augmentation.
+    loader_common = dict(pin_memory=use_cuda)
     train_loader = DataLoader(
         train_ds, batch_size=config["batch_size"], shuffle=True,
         num_workers=train_workers, drop_last=True, persistent_workers=train_workers > 0,
+        prefetch_factor=4 if train_workers > 0 else None, **loader_common,
     )
+    val_workers = min(2, train_workers)
     val_loader = DataLoader(
         val_ds, batch_size=config["batch_size"], shuffle=False,
-        num_workers=min(2, train_workers),
+        num_workers=val_workers, **loader_common,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_classes = config["num_classes"]
     class_weights = config.get("class_weights")
     model = PIDNetLite(num_classes=num_classes, base_channels=config["base_channels"]).to(device)
@@ -135,58 +155,122 @@ def main() -> None:
         aux_weight=config.get("aux_weight", 0.4),
         boundary_weight=config.get("boundary_weight", 20.0),
         class_weights=class_weights,
-    )
+    ).to(device)
     # val_loss always uses plain CEDiceLoss on the model's single main-output
     # tensor (eval mode) -- comparable across future architecture changes,
     # unlike the training loss which adds PIDNet's aux/boundary terms.
-    val_criterion = CEDiceLoss(config["ce_weight"], config["dice_weight"], class_weights=class_weights)
+    val_criterion = CEDiceLoss(config["ce_weight"], config["dice_weight"], class_weights=class_weights).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["epochs"])
 
-    snapshot_indices = list(range(min(config["num_val_snapshots"], len(val_ds))))
+    # Mixed precision (fp16 autocast + loss scaling) -- big throughput win on
+    # the 3090's tensor cores, and the loss scaler keeps fp16 gradients from
+    # underflowing. Disabled automatically on CPU. Toggle via config: amp.
+    use_amp = config.get("amp", True) and use_cuda
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    grad_clip = config.get("grad_clip")  # None -> off
 
+    start_epoch = 0
     best_iou = -1.0
-    for epoch in range(config["epochs"]):
+    last_ckpt = run_dir / "last.pt"
+    if args.resume and last_ckpt.exists():
+        ckpt = torch.load(last_ckpt, map_location=device)
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        if use_amp and ckpt.get("scaler_state_dict"):
+            scaler.load_state_dict(ckpt["scaler_state_dict"])
+        start_epoch = ckpt["epoch"] + 1
+        best_iou = ckpt.get("best_iou", -1.0)
+        print(f"Resumed from {last_ckpt} at epoch {start_epoch} (best_iou so far {best_iou:.4f})")
+
+    snapshot_indices = list(range(min(config["num_val_snapshots"], len(val_ds))))
+    total_epochs = config["epochs"]
+    n_train_batches = len(train_loader)
+
+    for epoch in range(start_epoch, total_epochs):
         model.train()
         train_loss = 0.0
-        for images, labels in train_loader:
-            images, labels = images.to(device), labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(images)  # (main, aux, boundary) tuple in train mode
-            loss = train_criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+        n_seen = 0
+        epoch_t0 = time.time()
+        for i, (images, labels) in enumerate(train_loader, 1):
+            images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            optimizer.zero_grad(set_to_none=True)
+            with torch.autocast(device_type="cuda", enabled=use_amp):
+                outputs = model(images)  # (main, aux, boundary) tuple in train mode
+                loss = train_criterion(outputs, labels)
+            scaler.scale(loss).backward()
+            if grad_clip:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+
             train_loss += loss.item() * images.size(0)
+            n_seen += images.size(0)
+            if i % 50 == 0 or i == n_train_batches:
+                elapsed = time.time() - epoch_t0
+                ips = n_seen / elapsed if elapsed > 0 else 0
+                print(
+                    f"  epoch {epoch+1}/{total_epochs}  batch {i}/{n_train_batches}  "
+                    f"loss={train_loss/n_seen:.4f}  {ips:.0f} img/s",
+                    flush=True,
+                )
         train_loss /= len(train_ds)
         scheduler.step()
 
         model.eval()
-        val_loss, val_iou_sum, n_val = 0.0, 0.0, 0
+        val_loss, n_val = 0.0, 0
+        inter = torch.zeros(num_classes, device=device)
+        union = torch.zeros(num_classes, device=device)
         with torch.no_grad():
             for images, labels in val_loader:
-                images, labels = images.to(device), labels.to(device)
-                logits = model(images)  # model.eval() -> single tensor
-                val_loss += val_criterion(logits, labels).item() * images.size(0)
-                val_iou_sum += iou_score(logits, labels) * images.size(0)
+                images = images.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                with torch.autocast(device_type="cuda", enabled=use_amp):
+                    logits = model(images)  # model.eval() -> single tensor
+                    val_loss += val_criterion(logits, labels).item() * images.size(0)
+                update_iou_stats(logits.float(), labels, inter, union)
                 n_val += images.size(0)
         val_loss /= n_val
-        val_iou = val_iou_sum / n_val
+
+        inter_np, union_np = inter.cpu().numpy(), union.cpu().numpy()
+        per_class_iou = np.where(union_np > 0, inter_np / np.maximum(union_np, 1), np.nan)
+        fg = per_class_iou[1:]
+        val_iou = float(np.nanmean(fg)) if np.isfinite(fg).any() else 1.0
+        per_class_str = "  ".join(
+            f"{_CLASS_NAMES[c]}={per_class_iou[c]:.2f}" for c in range(1, num_classes)
+        )
+        lr_now = scheduler.get_last_lr()[0]
+        epoch_time = time.time() - epoch_t0
 
         print(
-            f"epoch {epoch+1}/{config['epochs']} "
-            f"train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_iou={val_iou:.4f}"
+            f"epoch {epoch+1}/{total_epochs} "
+            f"train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_iou={val_iou:.4f} "
+            f"lr={lr_now:.2e} ({epoch_time:.0f}s)\n"
+            f"  per-class IoU: {per_class_str}"
         )
 
+        ckpt = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict() if use_amp else None,
+            "epoch": epoch,
+            "val_iou": val_iou,
+            "best_iou": best_iou,
+            "config": config,
+        }
+        torch.save(ckpt, last_ckpt)  # always, so --resume can pick up
         if val_iou > best_iou:
             best_iou = val_iou
-            torch.save(
-                {"model_state_dict": model.state_dict(), "epoch": epoch, "val_iou": val_iou, "config": config},
-                run_dir / "best.pt",
-            )
+            ckpt["best_iou"] = best_iou
+            torch.save(ckpt, run_dir / "best.pt")
             print(f"  -> new best (val_iou={best_iou:.4f}), saved {run_dir/'best.pt'}")
 
-        if (epoch + 1) % config["snapshot_every_n_epochs"] == 0 or epoch == config["epochs"] - 1:
+        if (epoch + 1) % config["snapshot_every_n_epochs"] == 0 or epoch == total_epochs - 1:
             save_snapshot(model, val_ds, snapshot_indices, device, run_dir / "val_samples" / f"epoch_{epoch+1:04d}.png")
 
     print(f"\nDone. Best val_iou={best_iou:.4f}. Checkpoint: {run_dir/'best.pt'}")

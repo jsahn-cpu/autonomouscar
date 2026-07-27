@@ -28,6 +28,15 @@ epochs: 60
 lr: 0.001
 weight_decay: 0.0001
 
+# Mixed precision (fp16 autocast + loss scaling) -- throughput win on the
+# 3090's tensor cores, auto-disabled on CPU. Set false only if a numerical
+# issue is suspected (loss going NaN that fp32 doesn't).
+amp: true
+# Gradient-norm clip. null = off. A small value (e.g. 5.0) caps occasional
+# loss spikes from the heavily-weighted boundary term -- only add it if the
+# loss curve is visibly unstable, it's not needed by default.
+grad_clip: null
+
 base_channels: 32   # PIDNetLite's width multiplier -- ~1.6-1.7M params at
                       # num_classes=6 (see pidnet.py's __main__ check)
 aux_weight: 0.4      # deep-supervision loss weight on the I/context
