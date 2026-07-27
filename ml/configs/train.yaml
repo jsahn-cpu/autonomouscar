@@ -18,11 +18,12 @@ image_size: [288, 512]  # [H, W] -- downsized from the source 1080x1920.
 num_classes: 6  # background + left_solid/center_dashed/right_solid/lane_1/lane_2
                  # -- must match labeling.yaml's class_ids (5 classes + bg)
 
-batch_size: 12  # PIDNet has more branches/activations per sample than a
-                  # plain U-Net, and inputs are now 3-channel color (vs. the
-                  # old 1-channel grayscale setup) -- kept conservative to
-                  # stay safe on a 4GB GPU; raise if training on the 3090
-                  # desktop and GPU memory allows.
+batch_size: 64  # raised from 12 (which was sized for a 4GB laptop GPU) --
+                  # this model is only ~1.6M params, a 3090's 24GB has huge
+                  # headroom at 288x512. If this OOMs, back off in steps
+                  # (48/32/24); if GPU util (nvidia-smi -l 1 while training)
+                  # still isn't near 100%, the bottleneck is data loading,
+                  # not batch size -- see num_workers below instead.
 epochs: 60
 lr: 0.001
 weight_decay: 0.0001
@@ -49,7 +50,14 @@ dice_weight: 0.5   # and inside val_criterion, which is always plain
 # is visibly underperforming in val snapshots/per-class IoU.
 class_weights: null
 
-num_workers: 8
+num_workers: 12  # raised from 8 -- each train sample does a cv2 resize +
+                   # rotation warpAffine + brightness/gamma jitter (see
+                   # dataset.py's _augment), which is CPU-bound and, with
+                   # ~30k train frames/epoch, is a plausible bottleneck
+                   # independent of GPU speed. Tune against the desktop's
+                   # actual core count (`nproc`) -- if raising this doesn't
+                   # help GPU utilization either, the fix is lighter/fewer
+                   # augmentation ops, not more workers.
 snapshot_every_n_epochs: 5
 num_val_snapshots: 4      # fixed val frames to render input|ground-truth|
                             # prediction snapshots for each time this fires
