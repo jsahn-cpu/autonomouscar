@@ -95,7 +95,12 @@ void setup() {
 
   stopAll();
 
-  Serial.println("READY");
+  // Version tag bumped on every firmware change during this characterization
+  // pass -- SerialDriver.connect() (ROS side) discards whatever the Arduino
+  // printed during its post-open reset window, so this is only visible via
+  // the Arduino IDE's own Serial Monitor, not the ROS teleop tool. Check it
+  // there right after upload to confirm the new code actually took.
+  Serial.println("READY fw=2026-07-27d wide-steer-limits");
 }
 
 void loop() {
