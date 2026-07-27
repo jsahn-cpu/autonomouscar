@@ -11,12 +11,13 @@ expressed in m/s or radians couldn't produce any real motion anyway. Raw
 PWM is what the firmware actually understands, and driving it directly is
 also how those gains will eventually get characterized in the first place.
 
-  g : arm (WASD starts affecting the vehicle)
-  x : stop and quit (also disarms and sends STOP before disconnecting)
+  g : arm/disarm toggle (WASD only affects the vehicle while armed)
+  x : stop -- disarms and zeroes throttle, does NOT quit (press g to
+      resume driving)
+  Ctrl+C : quit (sends STOP and disconnects before exiting)
   w : throttle_pwm += throttle_step   s : throttle_pwm -= throttle_step
   a : one steer pulse left            d : one steer pulse right
-      (steer_pwm sign for "left" is a guess -- see below -- flip
-      steer_step's sign here if the vehicle turns the wrong way)
+      (sign confirmed against the real vehicle 2026-07-27)
   c : reset the Arduino's software steering estimate to 0 (sends SC --
       use this if steering stops responding after many a/d presses in
       the same direction; see mega_motor_controller.ino's STEER_EST
@@ -57,7 +58,8 @@ from autodrive_vehicle.core.serial_protocol import DriveCommand, SerialProtocol,
 _INSTRUCTIONS = """\r
 keyboard_teleop_node (direct Arduino serial -- see arduino_bridge_node)\r
   g : arm/disarm toggle\r
-  x : stop and quit\r
+  x : stop (disarm) -- g to resume\r
+  Ctrl+C : quit\r
   w/s : throttle +/- step (held)\r
   a/d : one steer pulse left/right\r
   c : reset steering estimate to 0 (SC)\r
@@ -99,7 +101,6 @@ class KeyboardTeleopNode(Node):
         self._lock = threading.Lock()
         self._armed = False
         self._throttle_pwm = 0
-        self._quit = False
         self._last_ack = ''
 
         period_sec = 1.0 / publish_rate_hz if publish_rate_hz > 0.0 else 0.05
@@ -147,8 +148,7 @@ class KeyboardTeleopNode(Node):
             if key == 'x':
                 self._armed = False
                 self._throttle_pwm = 0
-                self._quit = True
-                print('\rstopping, quitting...\r')
+                print('\rstopped (disarmed) -- press g to resume, Ctrl+C to quit\r')
                 return
             if key == 'w':
                 self._throttle_pwm = min(self._throttle_pwm + self._throttle_step, self._max_throttle_pwm)
@@ -158,7 +158,7 @@ class KeyboardTeleopNode(Node):
                 if not self._armed:
                     print('\rnot armed -- press g first\r')
                     return
-                sign = -1 if key == 'a' else 1
+                sign = 1 if key == 'a' else -1
                 pulse = SteerPulseCommand(
                     steer_pwm=sign * self._steer_step, duration_ms=self._steer_pulse_duration_ms)
                 self._driver.write(self._protocol.encode_steer_pulse(pulse))
@@ -175,11 +175,6 @@ class KeyboardTeleopNode(Node):
             armed_note = '' if self._armed else ' (not armed -- press g first)'
             print(f'\rthrottle_pwm={self._throttle_pwm}{armed_note}\r')
 
-    @property
-    def should_quit(self) -> bool:
-        with self._lock:
-            return self._quit
-
     def destroy_node(self) -> bool:
         self._driver.write(self._protocol.encode_stop())
         self._driver.disconnect()
@@ -187,14 +182,16 @@ class KeyboardTeleopNode(Node):
 
 
 def _read_keys_loop(node: KeyboardTeleopNode) -> None:
-    """Runs on a background thread -- blocking single-char reads off stdin
-    in cbreak mode, forwarded to handle_key() until 'x' or the node itself
-    is asked to quit."""
+    """Runs on a background daemon thread -- blocking single-char reads off
+    stdin in cbreak mode, forwarded to handle_key() for as long as the
+    process lives. Nothing in handle_key ever ends this loop on its own
+    (there is no quit key -- see module docstring); it just dies with the
+    process on Ctrl+C, same as any other daemon thread."""
     fd = sys.stdin.fileno()
     original_settings = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
-        while not node.should_quit:
+        while True:
             key = sys.stdin.read(1)
             node.handle_key(key)
     finally:
@@ -210,7 +207,7 @@ def main(args: Optional[list] = None) -> None:
     key_thread.start()
 
     try:
-        while rclpy.ok() and not node.should_quit:
+        while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
