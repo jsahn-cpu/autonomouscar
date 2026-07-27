@@ -41,5 +41,8 @@ keyboard_teleop_node:
                                 # after confirming this is safe on blocks/low
                                 # speed, independent of max_throttle_pwm above
                                 # (that one's still an unset 0 placeholder)
-    steer_step: 40            # PWM units per a/d pulse
-    steer_pulse_duration_ms: 150
+    steer_step: 150           # PWM units per a/d pulse -- 40 was too weak to
+                                # move the steering motor at all in testing,
+                                # raised well past 100 (firmware ceiling is
+                                # now 255, see mega_motor_controller.ino)
+    steer_pulse_duration_ms: 250  # firmware's MAX_STEER_DURATION_MS ceiling
