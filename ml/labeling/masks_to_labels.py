@@ -201,9 +201,31 @@ def classify_left_right(blobs: List[Tuple[np.ndarray, float, float]], boundary):
     return left_mask, right_mask
 
 
+class _ClampedPoly:
+    """Boundary x = f(y), but with y CLAMPED to the row range the dashed
+    line was actually observed over before evaluating the polynomial -- so
+    it is never extrapolated past its data. A degree-2 fit swings hard to
+    one side the moment it's evaluated even slightly beyond its data, which
+    was flipping the apparent curvature of the lane_1/lane_2 boundary in the
+    near/far field of the frame where the dashed line wasn't detected (the
+    lane area spans the whole frame height, the dashed line only a band in
+    the middle). Outside [y_min, y_max] the boundary is just held flat at
+    the nearest endpoint value instead. Callable with a scalar or an array
+    of y (np.clip handles both), matching np.poly1d's interface."""
+
+    def __init__(self, poly: np.poly1d, y_min: float, y_max: float) -> None:
+        self._poly = poly
+        self._y_min = y_min
+        self._y_max = y_max
+
+    def __call__(self, y):
+        return self._poly(np.clip(y, self._y_min, self._y_max))
+
+
 def fit_dashed_boundary(
-    dashed_mask: np.ndarray, min_rows: int = 5, min_rows_quadratic: int = 10
-) -> Optional[np.poly1d]:
+    dashed_mask: np.ndarray, min_rows: int = 5, min_rows_quadratic: int = 10,
+    min_span_frac: float = 0.25,
+):
     """Fits x = f(y) through the dashed line's own per-row pixel centroid,
     to use as the lane_1/lane_2 split boundary instead of a fixed
     image-center column -- on a curving track the dashed line's actual
@@ -211,16 +233,19 @@ def fit_dashed_boundary(
     so a fixed vertical split produces a visibly wrong lane_1/lane_2
     boundary there (confirmed on real training samples).
 
-    Degree adapts to how much data there is: degree 2 (an actual curve)
-    once there are at least min_rows_quadratic distinct rows, degree 1 (a
-    straight line -- confirmed on real curved-track samples to visibly NOT
-    track the true curve, only its average tilt) as a fallback between
-    min_rows and min_rows_quadratic, since a quadratic needs more points to
-    not just fit noise from the dashed line's own gaps between dashes.
+    Returns a _ClampedPoly (never extrapolated past the observed rows -- see
+    that class), or None if fewer than min_rows distinct rows have a dashed
+    pixel at all (callers fall back to the old image-center split).
 
-    Returns None if fewer than min_rows distinct rows have a dashed pixel
-    at all (frame has little/no dashed-line detection) -- callers should
-    fall back to the old image-center split in that case.
+    Degree is chosen conservatively to avoid a wrong-way curve (which is
+    worse than a straight line -- it puts the lane_1/lane_2 boundary on the
+    wrong side): degree 2 (a real curve) only when the dashed line has both
+    >= min_rows_quadratic distinct rows AND spans >= min_span_frac of the
+    frame height (a quadratic fit to points clustered in a thin band bends
+    unpredictably), and additionally only if that parabola doesn't turn
+    around WITHIN the observed band (a real forward-view lane line doesn't
+    reverse direction -- a vertex inside the band means the curvature is
+    noise, so fall back to a line). Degree 1 otherwise.
     """
     ys, xs = np.nonzero(dashed_mask)
     if ys.size == 0:
@@ -238,13 +263,21 @@ def fit_dashed_boundary(
         return None
     rows = np.nonzero(valid)[0]
     centroids = row_sum[valid] / row_count[valid]
-    degree = 2 if valid.sum() >= min_rows_quadratic else 1
+    y_min, y_max = float(rows.min()), float(rows.max())
+
+    span_ok = (y_max - y_min) >= min_span_frac * num_rows
+    degree = 2 if (valid.sum() >= min_rows_quadratic and span_ok) else 1
     coeffs = np.polyfit(rows, centroids, deg=degree)
-    return np.poly1d(coeffs)
+    if degree == 2:
+        a, b, _ = coeffs
+        vertex = -b / (2 * a) if a != 0 else float("inf")
+        if y_min <= vertex <= y_max:  # parabola turns around inside the band -> noise
+            coeffs = np.polyfit(rows, centroids, deg=1)
+    return _ClampedPoly(np.poly1d(coeffs), y_min, y_max)
 
 
 def split_area_by_dashed(
-    area_mask: np.ndarray, boundary: np.poly1d
+    area_mask: np.ndarray, boundary
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     """Per-PIXEL split of area_mask into lane_1 (left of the dashed line's
     fitted curve) / lane_2 (right of it) using fit_dashed_boundary's
