@@ -17,6 +17,10 @@ also how those gains will eventually get characterized in the first place.
   a : one steer pulse left            d : one steer pulse right
       (steer_pwm sign for "left" is a guess -- see below -- flip
       steer_step's sign here if the vehicle turns the wrong way)
+  c : reset the Arduino's software steering estimate to 0 (sends SC --
+      use this if steering stops responding after many a/d presses in
+      the same direction; see mega_motor_controller.ino's STEER_EST
+      comment)
 
 Throttle and steering are NOT symmetric here, matching serial_protocol's
 actual wire semantics: throttle (`M`) is a held absolute PWM value, safe
@@ -56,6 +60,7 @@ keyboard_teleop_node (direct Arduino serial -- see arduino_bridge_node)\r
   x : stop and quit\r
   w/s : throttle +/- step (held)\r
   a/d : one steer pulse left/right\r
+  c : reset steering estimate to 0 (SC)\r
 (terminal is in raw mode -- no need to press Enter)\r
 """
 
@@ -158,6 +163,11 @@ class KeyboardTeleopNode(Node):
                     steer_pwm=sign * self._steer_step, duration_ms=self._steer_pulse_duration_ms)
                 self._driver.write(self._protocol.encode_steer_pulse(pulse))
                 print(f'\rsteer pulse {pulse.steer_pwm} for {pulse.duration_ms}ms\r')
+                self._drain_acks_locked()
+                return
+            elif key == 'c':
+                self._driver.write(self._protocol.encode_center_reset())
+                print('\rsteering estimate reset (SC)\r')
                 self._drain_acks_locked()
                 return
             else:

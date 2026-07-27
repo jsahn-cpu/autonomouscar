@@ -38,8 +38,8 @@
 // motor than its name said), confirmed by commanding one motor at a time
 // on the real vehicle and observing which one actually moved.
 const int L_PWM = 4;
-const int L_IN1 = 26;
-const int L_IN2 = 27;
+const int L_IN1 = 27;
+const int L_IN2 = 26;
 
 const int STEER_PWM = 2;
 const int STEER_IN1 = 22;
@@ -52,13 +52,24 @@ const int R_IN2 = 25;
 // Safety limits -- enforced here regardless of what the ROS side sends.
 // TODO: confirm safe values once the drive/steering motors are characterized.
 const int MAX_DRIVE_PWM = 180;
-const int MAX_STEER_PWM = 140;
+// Raised from 140 2026-07-27, then again after 220 was still reported weak
+// -- now the hardware ceiling (analogWrite's own max), no artificial
+// software cap left. Test in short pulses and watch for stalling/
+// overheating while characterizing this further; lower this once a safe
+// working value is found instead of leaving it maxed out long-term.
+const int MAX_STEER_PWM = 255;
 const int MAX_STEER_DURATION_MS = 250;
 
 // Software-only steering estimate.
 // This is NOT a real steering angle -- see file header.
-const int STEER_EST_MIN = -700;
-const int STEER_EST_MAX = 700;
+// +-700 was an untested placeholder too, and repeated manual test pulses
+// during characterization were hitting it (silently rejecting further
+// steer commands in that direction) well before the real mechanical rack
+// limit -- widened 2026-07-27 so it stops interfering with testing. Use
+// the 'c' key in keyboard_teleop_node (sends SC) to reset the estimate to
+// 0 if it drifts, rather than relying on this ceiling to catch it.
+const int STEER_EST_MIN = -100000;
+const int STEER_EST_MAX = 100000;
 int steerEstimate = 0;
 
 // Timed steering state
