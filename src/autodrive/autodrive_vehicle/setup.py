@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'arduino_bridge_node = autodrive_vehicle.nodes.arduino_bridge_node:main',
             'steering_pid_node = autodrive_vehicle.nodes.steering_pid_node:main',
+            'keyboard_teleop_node = autodrive_vehicle.nodes.keyboard_teleop_node:main',
         ],
     },
 )

@@ -10,11 +10,12 @@
 # that only covers this node's own process; this rule covers manual
 # v4l2-ctl/other-tool usage and any camera never unplugged since boot.
 #
-# idVendor 046d matches the by-id device path already used in
-# autodrive_bringup/config/camera.yaml. idProduct 082d is the standard C920
-# ID -- verify with `lsusb | grep -i logitech` on the actual vehicle if a
-# camera doesn't respond to this rule (`udevadm test` or check
-# /var/log/syslog for the RUN command's exit status).
+# idVendor 046d, idProduct 08e5 -- confirmed via `lsusb` on the actual
+# vehicle (both C920 units report identical 046d:08e5, and identical
+# ID_SERIAL, see camera.yaml's comment on why device paths use by-path
+# instead of by-id for this reason). If a camera doesn't respond to this
+# rule, check with `udevadm test` or /var/log/syslog for the RUN command's
+# exit status.
 #
 # ID_V4L_CAPABILITIES restricts this to the actual video-capture node --
 # a UVC device like the C920 also exposes a metadata-only node that
@@ -27,6 +28,6 @@
 #   sudo udevadm control --reload-rules
 #   sudo udevadm trigger --subsystem-match=video4linux
 
-SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="082d", \
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="08e5", \
   ENV{ID_V4L_CAPABILITIES}=="*:capture:*", \
   RUN+="/usr/bin/v4l2-ctl -d $devnode --set-ctrl exposure_dynamic_framerate=0"
