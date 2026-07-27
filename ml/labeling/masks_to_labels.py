@@ -190,17 +190,22 @@ def classify_left_right(blobs: List[Tuple[np.ndarray, float, float]], boundary):
     return left_mask, right_mask
 
 
-def fit_dashed_boundary(dashed_mask: np.ndarray, min_rows: int = 5) -> Optional[np.poly1d]:
-    """Fits x = f(y) (degree 1) through the dashed line's own per-row pixel
-    centroid, to use as the lane_1/lane_2 split boundary instead of a fixed
+def fit_dashed_boundary(
+    dashed_mask: np.ndarray, min_rows: int = 5, min_rows_quadratic: int = 10
+) -> Optional[np.poly1d]:
+    """Fits x = f(y) through the dashed line's own per-row pixel centroid,
+    to use as the lane_1/lane_2 split boundary instead of a fixed
     image-center column -- on a curving track the dashed line's actual
     x-position drifts a lot between the near and far field of the frame,
     so a fixed vertical split produces a visibly wrong lane_1/lane_2
-    boundary there (confirmed on real training samples). Degree 1 (not a
-    higher-order fit) on purpose: the dashed line is itself fragmented
-    (gaps between dashes), so per-row centroids are noisy/sparse and a
-    higher-order fit would overfit that noise rather than track the
-    line's real gentle curve.
+    boundary there (confirmed on real training samples).
+
+    Degree adapts to how much data there is: degree 2 (an actual curve)
+    once there are at least min_rows_quadratic distinct rows, degree 1 (a
+    straight line -- confirmed on real curved-track samples to visibly NOT
+    track the true curve, only its average tilt) as a fallback between
+    min_rows and min_rows_quadratic, since a quadratic needs more points to
+    not just fit noise from the dashed line's own gaps between dashes.
 
     Returns None if fewer than min_rows distinct rows have a dashed pixel
     at all (frame has little/no dashed-line detection) -- callers should
@@ -222,7 +227,8 @@ def fit_dashed_boundary(dashed_mask: np.ndarray, min_rows: int = 5) -> Optional[
         return None
     rows = np.nonzero(valid)[0]
     centroids = row_sum[valid] / row_count[valid]
-    coeffs = np.polyfit(rows, centroids, deg=1)
+    degree = 2 if valid.sum() >= min_rows_quadratic else 1
+    coeffs = np.polyfit(rows, centroids, deg=degree)
     return np.poly1d(coeffs)
 
 
