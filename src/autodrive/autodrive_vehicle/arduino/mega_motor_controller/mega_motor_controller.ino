@@ -28,9 +28,9 @@
  *
  * There is no real steering angle sensor yet, so steering is an open-loop
  * timed pulse: apply steer_pwm for duration_ms, then stop. steerEstimate is
- * a software-only accumulated guess used purely to clamp against a soft
- * travel limit -- it is not a measurement and will drift from the real
- * steering angle over time.
+ * a software-only accumulated guess (telemetry only, not enforced against
+ * any limit as of 2026-07-27 -- see timedSteering()) -- it is not a
+ * measurement and will drift from the real steering angle over time.
  */
 
 // Corrected 2026-07-27 against the actual wiring -- the L/STEER/R pin
@@ -60,16 +60,10 @@ const int MAX_DRIVE_PWM = 180;
 const int MAX_STEER_PWM = 255;
 const int MAX_STEER_DURATION_MS = 250;
 
-// Software-only steering estimate.
-// This is NOT a real steering angle -- see file header.
-// +-700 was an untested placeholder too, and repeated manual test pulses
-// during characterization were hitting it (silently rejecting further
-// steer commands in that direction) well before the real mechanical rack
-// limit -- widened 2026-07-27 so it stops interfering with testing. Use
-// the 'c' key in keyboard_teleop_node (sends SC) to reset the estimate to
-// 0 if it drifts, rather than relying on this ceiling to catch it.
-const int STEER_EST_MIN = -100000;
-const int STEER_EST_MAX = 100000;
+// Software-only steering estimate, telemetry only -- NOT a real steering
+// angle, and (2026-07-27) no longer clamped/enforced against any limit
+// here (see timedSteering()). Use the 'c' key in keyboard_teleop_node
+// (sends SC) to zero it if needed.
 int steerEstimate = 0;
 
 // Timed steering state
@@ -100,7 +94,7 @@ void setup() {
   // printed during its post-open reset window, so this is only visible via
   // the Arduino IDE's own Serial Monitor, not the ROS teleop tool. Check it
   // there right after upload to confirm the new code actually took.
-  Serial.println("READY fw=2026-07-27d wide-steer-limits");
+  Serial.println("READY fw=2026-07-27e no-steer-limit");
 }
 
 void loop() {
@@ -187,22 +181,16 @@ void timedSteering(int steerPwm, int durationMs) {
     return;
   }
 
+  // Soft-limit check removed 2026-07-27 (was +-700, then widened to
+  // +-100000, still got in the way during manual characterization) --
+  // steerEstimate is kept updated below purely as telemetry (see SC/'c'
+  // keybind to zero it), it no longer blocks any command. There is no
+  // real steering angle sensor, so this was always a guess, never a
+  // measured mechanical limit -- if the real steering rack has a hard
+  // physical end-stop, that's what actually protects it, same as before
+  // this software estimate existed.
   int direction = (steerPwm > 0) ? 1 : -1;
-  int estimatedNext = steerEstimate + direction * durationMs;
-
-  if (estimatedNext > STEER_EST_MAX) {
-    Serial.println("ERR STEER RIGHT LIMIT");
-    stopSteering();
-    return;
-  }
-
-  if (estimatedNext < STEER_EST_MIN) {
-    Serial.println("ERR STEER LEFT LIMIT");
-    stopSteering();
-    return;
-  }
-
-  steerEstimate = estimatedNext;
+  steerEstimate += direction * durationMs;
 
   setMotor(STEER_PWM, STEER_IN1, STEER_IN2, steerPwm);
 
