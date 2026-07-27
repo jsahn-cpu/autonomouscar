@@ -8,8 +8,7 @@ Classes (see labeling.yaml's class_ids): left_solid, center_dashed,
 right_solid, lane_1, lane_2, background(0). SAM3 is only ever prompted with
 generic concepts ("solid lane line", "dashed lane line", "road lane") --
 it isn't reliable at spatial instructions like "the line on the right", so
-left/right and lane-1/lane-2 assignment happens HERE instead, purely from
-each detected blob's own x-position in the frame:
+left/right and lane-1/lane-2 assignment happens HERE instead:
 
   1. Per prompt (solid_line / dashed_line / lane_area), filter that
      prompt's own instances by score, ROI, and a shape filter appropriate
@@ -19,11 +18,26 @@ each detected blob's own x-position in the frame:
      SAM3's frequent oversegmentation (one physical line/curve reported as
      many small overlapping instances, see label_with_sam3.py runs) back
      into one blob per physical line/area.
-  3. Classify each kept blob as left/right purely by whether its centroid
-     sits left or right of the frame's horizontal center.
-  4. Compose the final label: lane_1/lane_2 written first, then
-     left_solid/right_solid/center_dashed layered on top -- at any
-     overlapping pixel, the line class wins over the area class.
+  3. left_solid/right_solid: classify each kept blob as left/right purely
+     by whether its centroid sits left or right of the frame's horizontal
+     center -- fine for lines since they don't meaningfully curve within
+     one frame.
+  4. lane_1/lane_2: classified by which side of the DASHED LINE's own
+     fitted curve each pixel falls on (see fit_dashed_boundary/
+     split_area_by_dashed), not a fixed image-center split -- on a curving
+     track the image's horizontal center and the dashed line's actual
+     position drift apart a lot between the near and far field, so a fixed
+     split produces visibly wrong lane_1/lane_2 boundaries in curves. Falls
+     back to the old centroid-vs-image-center method if the dashed line
+     wasn't detected in this frame (too few points to fit a line through).
+  5. Compose the final label: lane_1/lane_2 written first, then
+     center_dashed, then left_solid/right_solid LAST -- line classes still
+     beat area classes everywhere, but solid now beats dashed at any
+     overlap between the two (previously dashed was painted last and could
+     silently overwrite a true solid-line pixel -- SAM3's dashed-line
+     prompt was observed to also weakly fire on solid-line pixels
+     sometimes, and the old order let that erase the whole solid line's
+     label at any frame where it happened).
 """
 import argparse
 import json
@@ -152,6 +166,53 @@ def classify_left_right(blobs_with_x: List[Tuple[np.ndarray, float]], image_widt
     return left_mask, right_mask
 
 
+def fit_dashed_boundary(dashed_mask: np.ndarray, min_rows: int = 5) -> Optional[np.poly1d]:
+    """Fits x = f(y) (degree 1) through the dashed line's own per-row pixel
+    centroid, to use as the lane_1/lane_2 split boundary instead of a fixed
+    image-center column -- on a curving track the dashed line's actual
+    x-position drifts a lot between the near and far field of the frame,
+    so a fixed vertical split produces a visibly wrong lane_1/lane_2
+    boundary there (confirmed on real training samples). Degree 1 (not a
+    higher-order fit) on purpose: the dashed line is itself fragmented
+    (gaps between dashes), so per-row centroids are noisy/sparse and a
+    higher-order fit would overfit that noise rather than track the
+    line's real gentle curve.
+
+    Returns None if fewer than min_rows distinct rows have a dashed pixel
+    at all (frame has little/no dashed-line detection) -- callers should
+    fall back to the old image-center split in that case.
+    """
+    ys, xs = np.nonzero(dashed_mask)
+    if ys.size == 0:
+        return None
+    row_to_xs: Dict[int, List[int]] = {}
+    for y, x in zip(ys.tolist(), xs.tolist()):
+        row_to_xs.setdefault(y, []).append(x)
+    if len(row_to_xs) < min_rows:
+        return None
+    rows = np.array(sorted(row_to_xs))
+    centroids = np.array([sum(row_to_xs[r]) / len(row_to_xs[r]) for r in rows])
+    coeffs = np.polyfit(rows, centroids, deg=1)
+    return np.poly1d(coeffs)
+
+
+def split_area_by_dashed(
+    area_mask: np.ndarray, boundary: np.poly1d
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Per-PIXEL split of area_mask into lane_1 (left of the dashed line's
+    fitted curve) / lane_2 (right of it) using fit_dashed_boundary's
+    result. Deliberately per-pixel rather than per-blob (unlike
+    classify_left_right) -- this correctly splits a single connected area
+    blob that spans across the dashed line, not just already-separate
+    blobs, which is the common case for a continuous road surface."""
+    h, w = area_mask.shape
+    boundary_x = boundary(np.arange(h))  # shape (h,)
+    col_idx = np.broadcast_to(np.arange(w), (h, w))
+    left = area_mask & (col_idx < boundary_x[:, None])
+    right = area_mask & (col_idx >= boundary_x[:, None])
+    return (left if left.any() else None), (right if right.any() else None)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-dir", default=str(_REPO_ROOT / "ml" / "data" / "sam3_raw"))
@@ -240,19 +301,28 @@ def main() -> None:
             area_merged = merge_masks(area, shape)
 
             left_solid, right_solid = classify_left_right(blobs_by_area(solid_merged, max_blobs_per_class), image_width)
-            lane_1, lane_2 = classify_left_right(blobs_by_area(area_merged, max_blobs_per_class), image_width)
 
+            dashed_boundary = fit_dashed_boundary(dashed_merged)
+            if dashed_boundary is not None:
+                lane_1, lane_2 = split_area_by_dashed(area_merged, dashed_boundary)
+            else:
+                lane_1, lane_2 = classify_left_right(blobs_by_area(area_merged, max_blobs_per_class), image_width)
+
+            # Order matters: area classes first, then center_dashed, then
+            # left_solid/right_solid last -- so line classes still beat
+            # area classes everywhere, but solid also beats dashed at any
+            # overlap between the two (see module docstring point 5).
             label = np.zeros(shape, dtype=np.uint8)
             if lane_1 is not None:
                 label[lane_1] = class_ids["lane_1"]
             if lane_2 is not None:
                 label[lane_2] = class_ids["lane_2"]
+            if dashed_merged.any():
+                label[dashed_merged] = class_ids["center_dashed"]
             if left_solid is not None:
                 label[left_solid] = class_ids["left_solid"]
             if right_solid is not None:
                 label[right_solid] = class_ids["right_solid"]
-            if dashed_merged.any():
-                label[dashed_merged] = class_ids["center_dashed"]
             if not label.any():
                 empty_count += 1
 
