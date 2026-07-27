@@ -4,7 +4,8 @@ each tile) for quick eyeballing of masks_to_labels.py's output -- no GUI
 labeling tool, just a directory of PNGs to flip through in an image viewer.
 
 Note down any frame_id whose label looks clearly wrong (e.g. a whole
-parking-marking blob, or nothing at all on a frame with obvious lines) into
+parking-marking blob classified as a lane line, left/right or lane_1/
+lane_2 swapped, or nothing at all on a frame with obvious lines) into
 ml/data/rejected_frames.txt (one frame_id per line) -- masks_to_labels.py
 and the training Dataset both respect that file.
 
@@ -14,17 +15,29 @@ import argparse
 import pathlib
 
 import cv2
+import numpy as np
 from PIL import Image, ImageDraw
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
+# BGR, index-matched to labeling.yaml's class_ids (0=background) -- same
+# table as ml/training/train.py's _CLASS_COLORS, duplicated rather than
+# imported since the two live in separate, independently-runnable packages
+# (ml/labeling has no dependency on ml/training).
+_CLASS_COLORS = np.array([
+    [0, 0, 0],        # 0 background
+    [0, 0, 255],       # 1 left_solid   (red)
+    [0, 255, 255],     # 2 center_dashed (yellow)
+    [255, 0, 0],       # 3 right_solid  (blue)
+    [0, 180, 0],       # 4 lane_1       (dark green)
+    [180, 0, 180],     # 5 lane_2       (purple)
+], dtype=np.uint8)
+
 
 def make_tile(frame_path: pathlib.Path, label_path: pathlib.Path, tile_size: int) -> Image.Image:
-    frame = cv2.imread(str(frame_path), cv2.IMREAD_GRAYSCALE)
-    label = cv2.imread(str(label_path), cv2.IMREAD_GRAYSCALE)
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    overlay = frame_bgr.copy()
-    overlay[label > 127] = (0, 0, 255)  # BGR red
+    frame_bgr = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+    label = cv2.imread(str(label_path), cv2.IMREAD_GRAYSCALE)  # class index 0-5, not a 0/255 mask
+    overlay = _CLASS_COLORS[label]
     blended = cv2.addWeighted(frame_bgr, 0.5, overlay, 0.5, 0)
     blended = cv2.resize(blended, (tile_size, tile_size), interpolation=cv2.INTER_AREA)
     tile = Image.fromarray(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB))
