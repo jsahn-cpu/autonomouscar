@@ -38,7 +38,7 @@ _FLIP_CLASS_REMAP = np.array([0, 3, 2, 1, 5, 4], dtype=np.uint8)
 cv2.setNumThreads(0)
 
 
-def load_rejected_frames(path: pathlib.Path) -> set:
+def load_id_set(path: pathlib.Path) -> set:
     if not path.exists():
         return set()
     return {line.strip() for line in path.read_text().splitlines() if line.strip()}
@@ -52,15 +52,33 @@ class LaneSegDataset(Dataset):
         image_size: Tuple[int, int] = (288, 512),  # (H, W)
         augment: bool = False,
         crop_bottom_fraction: float = 1.0,
+        require_reviewed: bool = False,
     ) -> None:
         data_dir = pathlib.Path(data_dir)
         self.raw_dir = data_dir / "raw_frames"
         self.labels_dir = data_dir / "labels"
-        rejected = load_rejected_frames(data_dir / "rejected_frames.txt")
+        rejected = load_id_set(data_dir / "rejected_frames.txt")
         self.frame_ids = [fid for fid in frame_ids if fid not in rejected]
-        dropped = len(frame_ids) - len(self.frame_ids)
-        if dropped:
-            print(f"LaneSegDataset: dropped {dropped} rejected frame(s) from this split")
+        dropped_rejected = len(frame_ids) - len(self.frame_ids)
+        if dropped_rejected:
+            print(f"LaneSegDataset: dropped {dropped_rejected} rejected frame(s) from this split")
+
+        # Opt-in whitelist mode (see ml/labeling/review_labels_interactive.py)
+        # -- restricts training to frames that have actually been eyeballed
+        # and passed, instead of the default "anything not explicitly
+        # rejected" blacklist. Off by default since review is a slow manual
+        # process that (as of writing) hasn't covered the whole dataset --
+        # only turn this on once reviewed_frames.txt covers enough of the
+        # data that shrinking to just it isn't throwing away most of the set.
+        if require_reviewed:
+            reviewed = load_id_set(data_dir / "reviewed_frames.txt")
+            before = len(self.frame_ids)
+            self.frame_ids = [fid for fid in self.frame_ids if fid in reviewed]
+            print(
+                f"LaneSegDataset: require_reviewed=True -- kept {len(self.frame_ids)}/{before} "
+                "frames that were actually reviewed (see reviewed_frames.txt)"
+            )
+
         self.image_size = image_size
         self.augment = augment
         # Keep only the bottom crop_bottom_fraction of each full-resolution
