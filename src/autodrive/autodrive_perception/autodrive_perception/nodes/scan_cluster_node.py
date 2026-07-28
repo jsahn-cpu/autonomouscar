@@ -43,6 +43,12 @@ class ScanClusterNode(Node):
         self.declare_parameter('roi_y_min', -12.0)
         self.declare_parameter('roi_y_max', 12.0)
 
+        # Safe-distance cutoff (m): ignore returns closer than this. The
+        # rear-mounted lidar sees the vehicle's own body a few cm away, so a
+        # min-range cutoff cleanly drops all self-returns without needing a
+        # precise ROI box. Applied on top of the scan's own range_min.
+        self.declare_parameter('min_range', 0.30)
+
         # Segmentation: adaptive gap threshold = base + coeff * range (m).
         self.declare_parameter('seg_dist_base', 0.06)
         self.declare_parameter('seg_dist_range_coeff', 0.05)
@@ -77,9 +83,13 @@ class ScanClusterNode(Node):
             self._p('roi_x_min').double_value, self._p('roi_x_max').double_value,
             self._p('roi_y_min').double_value, self._p('roi_y_max').double_value,
         )
+        # Raise the scan's range_min to the safe-distance cutoff so the
+        # vehicle's own body (a few cm behind the rear-mounted lidar) and
+        # other near clutter are dropped before clustering.
+        range_min = max(scan.range_min, self._p('min_range').double_value)
         clusters = cluster_scan(
             scan.angle_min, scan.angle_increment, scan.ranges,
-            scan.range_min, scan.range_max, roi=roi,
+            range_min, scan.range_max, roi=roi,
             seg_dist_base=self._p('seg_dist_base').double_value,
             seg_dist_range_coeff=self._p('seg_dist_range_coeff').double_value,
             min_points=self._p('min_points').integer_value,

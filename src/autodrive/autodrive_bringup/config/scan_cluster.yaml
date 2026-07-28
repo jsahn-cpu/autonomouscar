@@ -16,6 +16,13 @@ scan_cluster_node:
     roi_y_min: -12.0
     roi_y_max: 12.0
 
+    # Safe-distance cutoff (m): ignore anything closer than this. The lidar
+    # is rear-mounted (near the plate) so the vehicle's own body sits a few
+    # cm behind it -- raise this just past the body to drop all self-returns
+    # without a precise ROI box. Set it to (distance from lidar to the
+    # farthest bit of your own car) + a small margin.
+    min_range: 0.30
+
     # Adjacent-point segmentation gap threshold = base + coeff * range.
     # Raise base if a single object splits into pieces; lower it if two
     # separate objects merge.
