@@ -1,16 +1,23 @@
-"""ROS2 node wrapping scan_clusterer for lidar vehicle/slot detection.
+"""ROS2 node wrapping scan_clusterer for lidar vehicle detection + pass
+counting.
 
-Handles message conversion and pub/sub only; the clustering geometry lives
-in autodrive_perception.core.scan_clusterer. Subscribes to a 2D LaserScan,
-clusters it, gates for parked-car-sized clusters, and finds the pair that
-flanks an empty slot -- then publishes everything as a MarkerArray for RViz
-so the parameters (ROI, segmentation thresholds, car-size gate, slot gap)
-can be tuned against a live scan by eye.
+Handles message conversion and pub/sub only; the geometry lives in
+autodrive_perception.core.scan_clusterer / pass_counter. Subscribes to a 2D
+LaserScan, clusters it, gates for parked-car-sized clusters, and:
+  - publishes a MarkerArray for RViz tuning, and
+  - counts cars PASSING the detection zone (the ROI) as the vehicle drives
+    alongside the row -- each car that fills then clears the zone is one
+    pass (see PassCounter). When the count reaches target_count (2, the two
+    cars flanking the empty slot) it publishes a Bool trigger.
 
 Marker colors (namespace / color):
-  clusters (white)      : every raw cluster's oriented box
-  vehicles (green)      : clusters that passed the car-size gate
-  slot     (cyan sphere): midpoint of the detected flanking pair, if any
+  clusters (white)  : every raw cluster's oriented box
+  vehicles (green)  : clusters that passed the car-size gate (= zone occupied)
+
+Topics out:
+  <marker_topic>            visualization_msgs/MarkerArray
+  /perception/pass_count    std_msgs/Int32   (running count of cars passed)
+  /perception/parking_ready std_msgs/Bool    (True once count >= target)
 """
 import math
 from typing import Optional
@@ -18,11 +25,11 @@ from typing import Optional
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Bool, Int32
 from visualization_msgs.msg import Marker, MarkerArray
 
-from autodrive_perception.core.scan_clusterer import (
-    cluster_scan, passes_vehicle_gate, find_flanking_pair,
-)
+from autodrive_perception.core.scan_clusterer import cluster_scan, passes_vehicle_gate
+from autodrive_perception.core.pass_counter import PassCounter
 
 
 class ScanClusterNode(Node):
@@ -34,10 +41,11 @@ class ScanClusterNode(Node):
         self.declare_parameter('scan_topic', '/scan')
         self.declare_parameter('marker_topic', '/perception/clusters_viz')
 
-        # ROI box in the LASER frame (x fwd, y left, m). Any of these can be
-        # a very large magnitude to effectively disable that side. Default is
-        # wide-open -- narrow it once the lidar mounting is fixed so only the
-        # parking strip is considered.
+        # ROI box in the LASER frame (x fwd, y left, m) -- this doubles as the
+        # PASS-COUNT DETECTION ZONE: a car counts as "in the zone" when a
+        # car-sized cluster is inside this box. For the drive-past mission set
+        # it to the small strip on the lidar's left within ~1 m (e.g. y in
+        # [0, 1.0]) so each passing car fills then clears it.
         self.declare_parameter('roi_x_min', -12.0)
         self.declare_parameter('roi_x_max', 12.0)
         self.declare_parameter('roi_y_min', -12.0)
@@ -66,16 +74,26 @@ class ScanClusterNode(Node):
         self.declare_parameter('veh_max_width', 1.0)
         self.declare_parameter('veh_min_points', 6)
 
-        # Flanking pair: centroid separation of the two cars bounding a slot.
-        self.declare_parameter('slot_gap_min', 0.80)
-        self.declare_parameter('slot_gap_max', 1.50)
+        # Pass counting: a car must occupy the zone for enter_frames in a row
+        # before it counts as present, and be gone for exit_frames before it
+        # counts as passed (debounce against edge flicker). parking_ready
+        # fires when target_count cars have passed.
+        self.declare_parameter('enter_frames', 3)
+        self.declare_parameter('exit_frames', 3)
+        self.declare_parameter('target_count', 2)
 
-        self._marker_frame = None  # taken from the scan header
+        self._counter = PassCounter(
+            enter_frames=self._p('enter_frames').integer_value,
+            exit_frames=self._p('exit_frames').integer_value,
+        )
+        self._target_count = self._p('target_count').integer_value
 
         scan_topic = self.get_parameter('scan_topic').get_parameter_value().string_value
         marker_topic = self.get_parameter('marker_topic').get_parameter_value().string_value
         self._sub = self.create_subscription(LaserScan, scan_topic, self._on_scan, 10)
         self._pub = self.create_publisher(MarkerArray, marker_topic, 10)
+        self._count_pub = self.create_publisher(Int32, '/perception/pass_count', 10)
+        self._ready_pub = self.create_publisher(Bool, '/perception/parking_ready', 10)
 
         self.get_logger().info(f'scan_cluster_node started ({scan_topic} -> {marker_topic})')
 
@@ -109,21 +127,23 @@ class ScanClusterNode(Node):
                 min_points=self._p('veh_min_points').integer_value,
             )
         ]
-        pair = find_flanking_pair(
-            vehicles,
-            gap_min=self._p('slot_gap_min').double_value,
-            gap_max=self._p('slot_gap_max').double_value,
-        )
+        # A car occupies the detection zone whenever a car-sized cluster is
+        # present (clusters are already ROI-restricted). Feed that to the
+        # debounced pass counter.
+        occupied = len(vehicles) > 0
+        prev_count = self._counter.count
+        count = self._counter.update(occupied)
 
-        self._publish_markers(scan.header.frame_id, scan.header.stamp, clusters, vehicles, pair)
+        self._count_pub.publish(Int32(data=count))
+        ready = count >= self._target_count
+        self._ready_pub.publish(Bool(data=ready))
 
-        if pair is not None:
-            a, b = pair
+        if count != prev_count:
             self.get_logger().info(
-                f'2 vehicles + slot: center=({(a.centroid[0]+b.centroid[0])/2:.2f}, '
-                f'{(a.centroid[1]+b.centroid[1])/2:.2f}) gap='
-                f'{((a.centroid[0]-b.centroid[0])**2+(a.centroid[1]-b.centroid[1])**2)**0.5:.2f}m',
-                throttle_duration_sec=1.0)
+                f'car passed -> count={count}/{self._target_count}'
+                + ('  PARKING READY' if ready else ''))
+
+        self._publish_markers(scan.header.frame_id, scan.header.stamp, clusters, vehicles)
 
     def _box_marker(self, frame, stamp, ns, mid, cluster, rgba):
         m = Marker()
@@ -147,7 +167,7 @@ class ScanClusterNode(Node):
         m.lifetime.nanosec = 200_000_000  # 0.2s -- auto-clear stale markers
         return m
 
-    def _publish_markers(self, frame, stamp, clusters, vehicles, pair):
+    def _publish_markers(self, frame, stamp, clusters, vehicles):
         arr = MarkerArray()
         # a leading DELETEALL keeps counts from a busier frame from lingering
         clear = Marker()
@@ -159,24 +179,6 @@ class ScanClusterNode(Node):
             arr.markers.append(self._box_marker(frame, stamp, 'clusters', i, c, (1.0, 1.0, 1.0, 0.5)))
         for i, c in enumerate(vehicles):
             arr.markers.append(self._box_marker(frame, stamp, 'vehicles', i, c, (0.0, 1.0, 0.0, 0.8)))
-
-        if pair is not None:
-            a, b = pair
-            slot = Marker()
-            slot.header.frame_id = frame
-            slot.header.stamp = stamp
-            slot.ns = 'slot'
-            slot.id = 0
-            slot.type = Marker.SPHERE
-            slot.action = Marker.ADD
-            slot.pose.position.x = (a.box_center[0] + b.box_center[0]) / 2.0
-            slot.pose.position.y = (a.box_center[1] + b.box_center[1]) / 2.0
-            slot.pose.position.z = 0.0
-            slot.pose.orientation.w = 1.0
-            slot.scale.x = slot.scale.y = slot.scale.z = 0.12
-            slot.color.r, slot.color.g, slot.color.b, slot.color.a = (0.0, 1.0, 1.0, 1.0)
-            slot.lifetime.nanosec = 200_000_000
-            arr.markers.append(slot)
 
         self._pub.publish(arr)
 

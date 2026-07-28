@@ -1,16 +1,18 @@
-# Parameters for autodrive_perception/scan_cluster_node (lidar vehicle/slot
-# detection). All lengths are in the LASER frame (x forward, y left, metres).
-# These are STARTING values -- tune against a live scan in RViz once the
-# lidar mounting and the real car/slot sizes are known.
+# Parameters for autodrive_perception/scan_cluster_node (lidar vehicle
+# detection + pass counting). All lengths are in the LASER frame (x forward,
+# y left, metres). Tune against a live scan once the lidar mounting and the
+# real car sizes are known.
 scan_cluster_node:
   ros__parameters:
     scan_topic: "/scan"
     marker_topic: "/perception/clusters_viz"
 
-    # Region of interest: only cluster points inside this box. Wide-open by
-    # default; narrow it to just the parking strip (e.g. the rear-right
-    # quadrant) once mounting is fixed, so walls / the opposite side are
-    # excluded before clustering.
+    # ROI = the pass-count DETECTION ZONE. A car counts as "in the zone"
+    # while a car-sized cluster sits inside this box. For the drive-past
+    # mission, set it to the small strip on the lidar's LEFT within ~1 m so
+    # each passing car fills then clears it: y in [0, 1.0] (left, within 1 m
+    # laterally), x in a modest forward/back window. Left wide-open here as a
+    # starting point -- narrow it to the left strip on the real vehicle.
     roi_x_min: -12.0
     roi_x_max: 12.0
     roi_y_min: -12.0
@@ -55,7 +57,11 @@ scan_cluster_node:
     # 8-10, so a 20-point floor cleanly drops the noise and keeps the car.
     veh_min_points: 20
 
-    # Two parked cars flanking a slot: their centroid separation. Set to the
-    # real slot pitch (car width + slot width) with some tolerance.
-    slot_gap_min: 0.80
-    slot_gap_max: 1.50
+    # Pass counting (drive-past detection). A car must occupy the zone for
+    # enter_frames consecutive scans to count as present, and be gone for
+    # exit_frames to count as passed -- debounce against edge flicker. At
+    # ~10 Hz scan rate, 3 frames ~= 0.3 s. parking_ready fires once
+    # target_count cars have passed (the two flanking the empty slot).
+    enter_frames: 3
+    exit_frames: 3
+    target_count: 2
