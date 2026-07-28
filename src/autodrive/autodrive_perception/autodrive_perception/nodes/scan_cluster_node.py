@@ -9,15 +9,22 @@ target_count cars have passed (the two flanking the empty slot) it flags
 parking_ready.
 
 Topics out:
-  /perception/pass_count    std_msgs/Int32   running count of cars passed
-  /perception/parking_ready std_msgs/Bool    True once count >= target_count
+  /perception/pass_count    std_msgs/Int32          running count of cars passed
+  /perception/parking_ready std_msgs/Bool           True once count >= target_count
+  /perception/zone_viz      visualization_msgs/MarkerArray  RViz overlay:
+      - ROI box outline: cyan normally, GREEN while a car occupies the zone
+      - green box on each car-sized cluster inside the zone
+      - the running count as floating text
 """
+import math
 from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import Point
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Int32
+from visualization_msgs.msg import Marker, MarkerArray
 
 from autodrive_perception.core.scan_clusterer import cluster_scan, passes_vehicle_gate
 from autodrive_perception.core.pass_counter import PassCounter
@@ -75,6 +82,7 @@ class ScanClusterNode(Node):
         self._sub = self.create_subscription(LaserScan, scan_topic, self._on_scan, 10)
         self._count_pub = self.create_publisher(Int32, '/perception/pass_count', 10)
         self._ready_pub = self.create_publisher(Bool, '/perception/parking_ready', 10)
+        self._viz_pub = self.create_publisher(MarkerArray, '/perception/zone_viz', 10)
 
         self.get_logger().info(f'scan_cluster_node started (pass counting on {scan_topic})')
 
@@ -118,6 +126,74 @@ class ScanClusterNode(Node):
             self.get_logger().info(
                 f'car passed -> count={count}/{self._target_count}'
                 + ('  PARKING READY' if ready else ''))
+
+        self._publish_viz(scan.header.frame_id, scan.header.stamp, roi, vehicles, occupied, count)
+
+    def _publish_viz(self, frame, stamp, roi, vehicles, occupied, count):
+        x0, x1, y0, y1 = roi
+        arr = MarkerArray()
+        clear = Marker(); clear.header.frame_id = frame; clear.action = Marker.DELETEALL
+        arr.markers.append(clear)
+
+        # ROI box outline -- green while occupied, cyan when clear.
+        box = Marker()
+        box.header.frame_id = frame
+        box.header.stamp = stamp
+        box.ns = 'zone'
+        box.id = 0
+        box.type = Marker.LINE_STRIP
+        box.action = Marker.ADD
+        box.scale.x = 0.02  # line width
+        box.color.r, box.color.g, box.color.b, box.color.a = (
+            (0.0, 1.0, 0.0, 1.0) if occupied else (0.0, 1.0, 1.0, 0.8))
+        box.pose.orientation.w = 1.0
+        corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+        box.points = [self._pt(cx, cy) for cx, cy in corners]
+        arr.markers.append(box)
+
+        # a green filled box on each car-sized cluster in the zone
+        for i, c in enumerate(vehicles):
+            m = Marker()
+            m.header.frame_id = frame
+            m.header.stamp = stamp
+            m.ns = 'vehicles'
+            m.id = i
+            m.type = Marker.CUBE
+            m.action = Marker.ADD
+            m.pose.position.x, m.pose.position.y = c.box_center
+            half = c.yaw / 2.0
+            m.pose.orientation.z = float(math.sin(half))
+            m.pose.orientation.w = float(math.cos(half))
+            m.scale.x = max(c.length, 0.05)
+            m.scale.y = max(c.width, 0.05)
+            m.scale.z = 0.05
+            m.color.r, m.color.g, m.color.b, m.color.a = (0.0, 1.0, 0.0, 0.6)
+            m.lifetime.nanosec = 300_000_000
+            arr.markers.append(m)
+
+        # the running count as floating text above the zone
+        txt = Marker()
+        txt.header.frame_id = frame
+        txt.header.stamp = stamp
+        txt.ns = 'count'
+        txt.id = 0
+        txt.type = Marker.TEXT_VIEW_FACING
+        txt.action = Marker.ADD
+        txt.pose.position.x = (x0 + x1) / 2.0
+        txt.pose.position.y = (y0 + y1) / 2.0
+        txt.pose.position.z = 0.3
+        txt.pose.orientation.w = 1.0
+        txt.scale.z = 0.2  # text height
+        txt.color.r = txt.color.g = txt.color.b = txt.color.a = 1.0
+        txt.text = f'count {count}/{self._target_count}'
+        arr.markers.append(txt)
+
+        self._viz_pub.publish(arr)
+
+    @staticmethod
+    def _pt(x, y):
+        p = Point(); p.x = float(x); p.y = float(y); p.z = 0.0
+        return p
 
 
 def main(args: Optional[list] = None) -> None:

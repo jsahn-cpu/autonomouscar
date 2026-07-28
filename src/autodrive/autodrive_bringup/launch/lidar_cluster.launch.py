@@ -5,20 +5,21 @@ counting) on a live scan.
 
 Args:
     serial_port:=/dev/ttyUSB0   # RPLIDAR serial port
+    rviz:=false                  # skip RViz
 
-Watch the count:
-    ros2 topic echo /perception/pass_count     # Int32, cars passed so far
-    ros2 topic echo /perception/parking_ready  # Bool, True at target_count
-
-Tune the detection zone (ROI) and gates in config/scan_cluster.yaml -- the
-ROI must be a small strip that's EMPTY when no car is in it, or the count
-never advances.
+RViz (Fixed Frame = laser): add /scan (LaserScan) and /perception/zone_viz
+(MarkerArray). The zone box shows the detection ROI (cyan; GREEN while a car
+occupies it), a green box on each car in the zone, and the running count as
+text. Watch the count on /perception/pass_count too. Tune the ROI/gates in
+config/scan_cluster.yaml -- the ROI must be EMPTY when no car is in it, or
+the count never advances.
 """
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -28,6 +29,7 @@ def generate_launch_description() -> LaunchDescription:
     cluster_params = os.path.join(bringup_share, 'config', 'scan_cluster.yaml')
 
     serial_port = LaunchConfiguration('serial_port')
+    use_rviz = LaunchConfiguration('rviz')
 
     lidar_node = Node(
         package='sllidar_ros2', executable='sllidar_node', name='sllidar_node',
@@ -48,8 +50,15 @@ def generate_launch_description() -> LaunchDescription:
         name='scan_cluster_node', output='screen', parameters=[cluster_params],
     )
 
+    rviz_node = Node(
+        package='rviz2', executable='rviz2', name='rviz2',
+        output='screen', condition=IfCondition(use_rviz),
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('serial_port', default_value='/dev/ttyUSB0'),
+        DeclareLaunchArgument('rviz', default_value='true'),
         lidar_node,
         cluster_node,
+        rviz_node,
     ])
