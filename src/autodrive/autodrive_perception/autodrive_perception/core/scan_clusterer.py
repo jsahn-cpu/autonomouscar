@@ -90,6 +90,7 @@ def cluster_scan(
     while a real occlusion gap between two objects still breaks it (either
     via many dropped beams OR the spatial-distance threshold on the
     surviving points)."""
+    n_beams = len(ranges)
     xy, idx, r = _polar_to_xy(angle_min, angle_increment, ranges, range_min, range_max)
     if len(xy) == 0:
         return []
@@ -98,7 +99,10 @@ def cluster_scan(
     if len(xy) < min_points:
         return []
 
-    clusters: List[Cluster] = []
+    # First pass: break into raw segments (point arrays) on a spatial jump or
+    # too many dropped beams. Segments are NOT yet size-filtered so the
+    # wraparound merge below can still join a split object.
+    segments = []  # each: dict(pts, first_idx, last_idx)
     start = 0
     for i in range(1, len(xy) + 1):
         cut = i == len(xy)
@@ -108,15 +112,35 @@ def cluster_scan(
             thresh = seg_dist_base + seg_dist_range_coeff * r[i - 1]
             cut = beam_gap or step > thresh
         if cut:
-            seg = xy[start:i]
-            if len(seg) >= min_points:
-                center, length, width, yaw = _oriented_box(seg)
-                clusters.append(Cluster(
-                    centroid=(float(seg[:, 0].mean()), float(seg[:, 1].mean())),
-                    box_center=center, length=length, width=width, yaw=yaw,
-                    n_points=len(seg), points=seg,
-                ))
+            segments.append({'pts': xy[start:i], 'first_idx': int(idx[start]), 'last_idx': int(idx[i - 1])})
             start = i
+
+    # Wraparound merge: a full-circle scan is a ring, so the last beam
+    # (angle ~+pi) is adjacent to the first (angle ~-pi). An object sitting
+    # on that seam (here: straight behind the lidar) lands split across the
+    # two ends of the array. Stitch the last and first segments if they're
+    # spatially close and the beam gap ACROSS the seam is small.
+    if len(segments) >= 2 and n_beams > 0:
+        first, last = segments[0], segments[-1]
+        seam_beam_gap = (n_beams - 1 - last['last_idx']) + first['first_idx']
+        seam_step = float(np.hypot(*(first['pts'][0] - last['pts'][-1])))
+        seam_thresh = seg_dist_base + seg_dist_range_coeff * float(np.hypot(*last['pts'][-1]))
+        if seam_beam_gap <= max_beam_gap and seam_step <= seam_thresh:
+            last['pts'] = np.vstack([last['pts'], first['pts']])
+            segments = segments[1:]           # drop the now-merged first
+            segments[-1] = last               # keep the combined one
+
+    clusters: List[Cluster] = []
+    for seg in segments:
+        pts = seg['pts']
+        if len(pts) < min_points:
+            continue
+        center, length, width, yaw = _oriented_box(pts)
+        clusters.append(Cluster(
+            centroid=(float(pts[:, 0].mean()), float(pts[:, 1].mean())),
+            box_center=center, length=length, width=width, yaw=yaw,
+            n_points=len(pts), points=pts,
+        ))
     return clusters
 
 
