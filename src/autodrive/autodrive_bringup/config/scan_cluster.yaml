@@ -11,13 +11,13 @@ scan_cluster_node:
     # strip that's EMPTY when no car is passing -- otherwise a wall
     # permanently occupies it and the count never advances (that was the
     # "pass_count stuck at 0" bug: the ROI was left wide-open).
-    # Rotated 90 deg CCW from the earlier left-zone, then shifted +1.0 m left
-    # (+y) and -0.5 m back (-x): the strip now sits on the lidar's rear-left.
+    # Anchored so the box's top-right corner (x_max, y_min) sits AT the lidar
+    # (origin): the 1x1 m strip extends back-left (-x, +y) from the lidar.
     # Adjust to where cars actually pass on the real mounting.
-    roi_x_min: -1.5
-    roi_x_max: -0.5
-    roi_y_min: -0.5
-    roi_y_max: 2.5
+    roi_x_min: -1.0
+    roi_x_max: 0.0
+    roi_y_min: 0.0
+    roi_y_max: 1.0
 
     # Safe-distance cutoff (m): ignore anything closer than this. The lidar
     # is rear-mounted (near the plate) so the vehicle's own body sits a few
