@@ -24,20 +24,36 @@ scan_cluster_node:
     min_range: 0.30
 
     # Adjacent-point segmentation gap threshold = base + coeff * range.
-    # Raise base if a single object splits into pieces; lower it if two
-    # separate objects merge.
-    seg_dist_base: 0.06
-    seg_dist_range_coeff: 0.05
+    # Raised from 0.06 -> 0.15 so a single (rounded) car's points merge into
+    # ONE cluster instead of fragmenting into many small ones. Raise further
+    # if a car still splits; lower it if two separate cars merge into one.
+    seg_dist_base: 0.15
+    seg_dist_range_coeff: 0.08
     min_points: 4
+    # Allow up to this many dropped beams within one cluster before
+    # breaking. The rounded/glossy car reflects nothing for a beam or two
+    # mid-surface, which was splitting it into two halves -- 6 stitches it
+    # back into one. A real slot between two cars is a much bigger gap
+    # (many beams AND a large spatial jump), so it still breaks correctly.
+    max_beam_gap: 6
 
     # Car-size gate -- LENGTH + point count only (a 2D lidar sees a car as a
     # near-zero-thickness line, so width is left effectively unbounded).
-    # Set veh_min/max_length to the model car's real footprint span.
-    veh_min_length: 0.12
-    veh_max_length: 0.60
+    # Model car is 0.50 m wide x 0.95 m long and ROUNDED (no sharp corners),
+    # so the lidar sees a smooth arc, not a straight edge: the cluster is one
+    # curved blob whose extent runs ~0.50 m (rounded end) up to ~0.95 m
+    # (side). Because the far part of a rounded body curves out of view, the
+    # observed extent can be shorter than the full dimension, so min_length
+    # is kept low (0.30). max_width is left loose since a rounded face gives
+    # the box a real (non-zero) thickness, unlike a flat edge.
+    veh_min_length: 0.30
+    veh_max_length: 1.20
     veh_min_width: 0.0
     veh_max_width: 1.0
-    veh_min_points: 6
+    # Raised 8 -> 20: on a live scan the real car returned ~75 points while
+    # far-away noise clusters that slipped through the length gate had only
+    # 8-10, so a 20-point floor cleanly drops the noise and keeps the car.
+    veh_min_points: 20
 
     # Two parked cars flanking a slot: their centroid separation. Set to the
     # real slot pitch (car width + slot width) with some tolerance.

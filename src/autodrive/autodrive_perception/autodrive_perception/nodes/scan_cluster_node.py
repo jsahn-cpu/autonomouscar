@@ -53,6 +53,10 @@ class ScanClusterNode(Node):
         self.declare_parameter('seg_dist_base', 0.06)
         self.declare_parameter('seg_dist_range_coeff', 0.05)
         self.declare_parameter('min_points', 4)
+        # Allow up to this many dropped beams inside one cluster before
+        # breaking -- a rounded/glossy car reflects nothing for a beam or
+        # two mid-surface, which was splitting it into halves.
+        self.declare_parameter('max_beam_gap', 6)
 
         # Car-size gate (m) -- LENGTH + point count only, not width (a 2D
         # lidar sees a car as a near-zero-thickness line/L).
@@ -93,6 +97,7 @@ class ScanClusterNode(Node):
             seg_dist_base=self._p('seg_dist_base').double_value,
             seg_dist_range_coeff=self._p('seg_dist_range_coeff').double_value,
             min_points=self._p('min_points').integer_value,
+            max_beam_gap=self._p('max_beam_gap').integer_value,
         )
         vehicles = [
             c for c in clusters if passes_vehicle_gate(

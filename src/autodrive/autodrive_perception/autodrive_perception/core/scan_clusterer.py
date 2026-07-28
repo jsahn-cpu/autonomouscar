@@ -80,10 +80,16 @@ def cluster_scan(
     seg_dist_base: float = 0.05,      # C0: gap threshold at range 0 (m)
     seg_dist_range_coeff: float = 0.05,  # C1: extra gap allowed per meter of range
     min_points: int = 4,
+    max_beam_gap: int = 6,
 ) -> List[Cluster]:
     """Cluster one scan. seg threshold between consecutive points is
-    seg_dist_base + seg_dist_range_coeff * range (adaptive). A run of
-    invalid/out-of-ROI beams also breaks a cluster."""
+    seg_dist_base + seg_dist_range_coeff * range (adaptive). A gap of MORE
+    than max_beam_gap dropped beams also breaks a cluster -- allowing a few
+    dropouts keeps a single object (whose surface reflects nothing for a
+    beam or two, e.g. a dark/glossy patch) from splitting in the middle,
+    while a real occlusion gap between two objects still breaks it (either
+    via many dropped beams OR the spatial-distance threshold on the
+    surviving points)."""
     xy, idx, r = _polar_to_xy(angle_min, angle_increment, ranges, range_min, range_max)
     if len(xy) == 0:
         return []
@@ -97,7 +103,7 @@ def cluster_scan(
     for i in range(1, len(xy) + 1):
         cut = i == len(xy)
         if not cut:
-            beam_gap = idx[i] - idx[i - 1] > 1  # dropped beam(s) in between
+            beam_gap = idx[i] - idx[i - 1] > max_beam_gap  # too many dropped beams
             step = float(np.hypot(*(xy[i] - xy[i - 1])))
             thresh = seg_dist_base + seg_dist_range_coeff * r[i - 1]
             cut = beam_gap or step > thresh
