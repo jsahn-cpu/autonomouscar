@@ -1,0 +1,69 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /ScanCluster1
+      Splitter Ratio: 0.5
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 20
+      Color: 160; 160; 160
+      Reference Frame: laser
+    - Class: rviz_default_plugins/MarkerArray
+      Name: ScanCluster
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /perception/zone_viz
+      Value: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: Scan
+      Enabled: false
+      Size (m): 0.02
+      Style: Points
+      Color: 255; 255; 255
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /scan
+      Value: true
+  Global Options:
+    Background Color: 30; 30; 30
+    Fixed Frame: laser
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 1.2
+      Yaw: 3.14
+Window Geometry:
+  Height: 800
+  Width: 1200
+  Hide Left Dock: false
+  Hide Right Dock: false

@@ -27,6 +27,7 @@ from launch_ros.actions import Node
 def generate_launch_description() -> LaunchDescription:
     bringup_share = get_package_share_directory('autodrive_bringup')
     cluster_params = os.path.join(bringup_share, 'config', 'scan_cluster.yaml')
+    rviz_config = os.path.join(bringup_share, 'rviz', 'lidar_cluster.rviz')
 
     serial_port = LaunchConfiguration('serial_port')
     use_rviz = LaunchConfiguration('rviz')
@@ -53,6 +54,7 @@ def generate_launch_description() -> LaunchDescription:
     rviz_node = Node(
         package='rviz2', executable='rviz2', name='rviz2',
         output='screen', condition=IfCondition(use_rviz),
+        arguments=['-d', rviz_config],  # Fixed Frame=laser + zone_viz preloaded
     )
 
     return LaunchDescription([
