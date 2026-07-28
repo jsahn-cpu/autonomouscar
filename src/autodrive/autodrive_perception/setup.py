@@ -23,6 +23,7 @@ setup(
             'bev_node = autodrive_perception.nodes.bev_node:main',
             'local_map_node = autodrive_perception.nodes.local_map_node:main',
             'lane_detector_node = autodrive_perception.nodes.lane_detector_node:main',
+            'scan_cluster_node = autodrive_perception.nodes.scan_cluster_node:main',
         ],
     },
 )

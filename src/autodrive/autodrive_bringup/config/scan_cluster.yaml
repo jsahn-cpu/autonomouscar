@@ -1,0 +1,38 @@
+# Parameters for autodrive_perception/scan_cluster_node (lidar vehicle/slot
+# detection). All lengths are in the LASER frame (x forward, y left, metres).
+# These are STARTING values -- tune against a live scan in RViz once the
+# lidar mounting and the real car/slot sizes are known.
+scan_cluster_node:
+  ros__parameters:
+    scan_topic: "/scan"
+    marker_topic: "/perception/clusters_viz"
+
+    # Region of interest: only cluster points inside this box. Wide-open by
+    # default; narrow it to just the parking strip (e.g. the rear-right
+    # quadrant) once mounting is fixed, so walls / the opposite side are
+    # excluded before clustering.
+    roi_x_min: -12.0
+    roi_x_max: 12.0
+    roi_y_min: -12.0
+    roi_y_max: 12.0
+
+    # Adjacent-point segmentation gap threshold = base + coeff * range.
+    # Raise base if a single object splits into pieces; lower it if two
+    # separate objects merge.
+    seg_dist_base: 0.06
+    seg_dist_range_coeff: 0.05
+    min_points: 4
+
+    # Car-size gate -- LENGTH + point count only (a 2D lidar sees a car as a
+    # near-zero-thickness line, so width is left effectively unbounded).
+    # Set veh_min/max_length to the model car's real footprint span.
+    veh_min_length: 0.12
+    veh_max_length: 0.60
+    veh_min_width: 0.0
+    veh_max_width: 1.0
+    veh_min_points: 6
+
+    # Two parked cars flanking a slot: their centroid separation. Set to the
+    # real slot pitch (car width + slot width) with some tolerance.
+    slot_gap_min: 0.80
+    slot_gap_max: 1.50

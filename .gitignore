@@ -26,3 +26,8 @@ ml/runs/
 # Untracked FastSAM experiment (unused template scripts + downloaded .pt
 # checkpoint -- see conversation: shelved in favor of the SAM3 pipeline)
 fastsam/
+
+# Third-party RPLIDAR A1 driver -- clone per machine, not vendored:
+#   cd src && git clone https://github.com/Slamtec/sllidar_ros2.git
+#   colcon build --packages-select sllidar_ros2
+src/sllidar_ros2/
