@@ -157,6 +157,34 @@ class ScanClusterNode(Node):
             pts.points.append(self._pt(rng * math.cos(a), rng * math.sin(a)))
         arr.markers.append(pts)
 
+        # Lidar position: a red sphere at the origin + a label, so the scan
+        # is easy to orient (everything is in the laser frame, so the lidar
+        # itself sits at (0, 0)).
+        lidar = Marker()
+        lidar.header.frame_id = frame
+        lidar.header.stamp = stamp
+        lidar.ns = 'lidar'
+        lidar.id = 0
+        lidar.type = Marker.SPHERE
+        lidar.action = Marker.ADD
+        lidar.pose.orientation.w = 1.0
+        lidar.scale.x = lidar.scale.y = lidar.scale.z = 0.12
+        lidar.color.r, lidar.color.g, lidar.color.b, lidar.color.a = (1.0, 0.0, 0.0, 1.0)
+        arr.markers.append(lidar)
+        lidar_txt = Marker()
+        lidar_txt.header.frame_id = frame
+        lidar_txt.header.stamp = stamp
+        lidar_txt.ns = 'lidar'
+        lidar_txt.id = 1
+        lidar_txt.type = Marker.TEXT_VIEW_FACING
+        lidar_txt.action = Marker.ADD
+        lidar_txt.pose.position.z = 0.15
+        lidar_txt.pose.orientation.w = 1.0
+        lidar_txt.scale.z = 0.12
+        lidar_txt.color.r = lidar_txt.color.g = lidar_txt.color.b = lidar_txt.color.a = 1.0
+        lidar_txt.text = 'LIDAR'
+        arr.markers.append(lidar_txt)
+
         # ROI box outline -- green while occupied, cyan when clear.
         box = Marker()
         box.header.frame_id = frame

@@ -10,13 +10,14 @@ scan_cluster_node:
     # while a car-sized cluster sits inside this box, so it MUST be a small
     # strip that's EMPTY when no car is passing -- otherwise a wall
     # permanently occupies it and the count never advances (that was the
-    # "pass_count stuck at 0" bug: the ROI was left wide-open). Default: the
-    # lidar's left within ~1 m (y in [0, 1.0]) and a modest fore/aft window.
-    # Adjust to where cars actually pass on the real vehicle's mounting.
-    roi_x_min: -1.5
-    roi_x_max: 1.5
-    roi_y_min: 0.0
-    roi_y_max: 1.0
+    # "pass_count stuck at 0" bug: the ROI was left wide-open).
+    # Rotated 90 deg CCW from the earlier left-zone: now the strip is on the
+    # lidar's -x side (behind the lidar's 0 deg) within ~1 m, spanning +-1.5 m
+    # laterally. Adjust to where cars actually pass on the real mounting.
+    roi_x_min: -1.0
+    roi_x_max: 0.0
+    roi_y_min: -1.5
+    roi_y_max: 1.5
 
     # Safe-distance cutoff (m): ignore anything closer than this. The lidar
     # is rear-mounted (near the plate) so the vehicle's own body sits a few
