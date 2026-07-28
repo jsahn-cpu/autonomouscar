@@ -12,6 +12,7 @@ Topics out:
   /perception/pass_count    std_msgs/Int32          running count of cars passed
   /perception/parking_ready std_msgs/Bool           True once count >= target_count
   /perception/zone_viz      visualization_msgs/MarkerArray  RViz overlay:
+      - all raw scan points (grey) -- no separate /scan display needed
       - ROI box outline: cyan normally, GREEN while a car occupies the zone
       - green box on each car-sized cluster inside the zone
       - the running count as floating text
@@ -127,13 +128,34 @@ class ScanClusterNode(Node):
                 f'car passed -> count={count}/{self._target_count}'
                 + ('  PARKING READY' if ready else ''))
 
-        self._publish_viz(scan.header.frame_id, scan.header.stamp, roi, vehicles, occupied, count)
+        self._publish_viz(scan, roi, vehicles, occupied, count)
 
-    def _publish_viz(self, frame, stamp, roi, vehicles, occupied, count):
+    def _publish_viz(self, scan, roi, vehicles, occupied, count):
+        frame, stamp = scan.header.frame_id, scan.header.stamp
         x0, x1, y0, y1 = roi
         arr = MarkerArray()
         clear = Marker(); clear.header.frame_id = frame; clear.action = Marker.DELETEALL
         arr.markers.append(clear)
+
+        # Full raw scan as grey points (so /scan doesn't need its own display).
+        pts = Marker()
+        pts.header.frame_id = frame
+        pts.header.stamp = stamp
+        pts.ns = 'scan'
+        pts.id = 0
+        pts.type = Marker.POINTS
+        pts.action = Marker.ADD
+        pts.scale.x = pts.scale.y = 0.02  # point size (m)
+        pts.color.r, pts.color.g, pts.color.b, pts.color.a = (0.6, 0.6, 0.6, 1.0)
+        pts.pose.orientation.w = 1.0
+        amin, ainc = scan.angle_min, scan.angle_increment
+        rmax = scan.range_max
+        for i, rng in enumerate(scan.ranges):
+            if not (0.0 < rng <= rmax) or math.isinf(rng) or math.isnan(rng):
+                continue
+            a = amin + i * ainc
+            pts.points.append(self._pt(rng * math.cos(a), rng * math.sin(a)))
+        arr.markers.append(pts)
 
         # ROI box outline -- green while occupied, cyan when clear.
         box = Marker()
