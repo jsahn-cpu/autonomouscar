@@ -3,8 +3,8 @@
 No rclpy dependency -- pure geometry so it can be unit tested and reused
 outside a node (see scan_cluster_node.py for the ROS wrapper). Turns one
 LaserScan into a list of Cluster objects (centroid + oriented bounding box
-+ point count), which the parking mission then gates by size and pairs into
-"the two parked cars flanking the slot".
++ point count), which the parking mission gates by size to decide whether a
+car currently occupies the detection zone (for the drive-past pass counter).
 
 Why adjacent-point segmentation (not DBSCAN): a LaserScan's points are
 already ORDERED by beam angle, so a single O(n) left-to-right pass that
@@ -156,24 +156,3 @@ def passes_vehicle_gate(
         and min_length <= c.length <= max_length
         and min_width <= c.width <= max_width
     )
-
-
-def find_flanking_pair(
-    vehicles: List[Cluster], gap_min: float, gap_max: float,
-) -> Optional[Tuple[Cluster, Cluster]]:
-    """Among vehicle clusters, the pair whose centroids are gap_min..gap_max
-    apart -- the two parked cars bounding an empty slot. Returns the closest
-    (smallest-range) such pair, or None. The empty slot is the space between
-    them; the mission builds the parking target from their inner edges."""
-    best = None
-    best_key = None
-    for a in range(len(vehicles)):
-        for b in range(a + 1, len(vehicles)):
-            va, vb = vehicles[a], vehicles[b]
-            d = float(np.hypot(va.centroid[0] - vb.centroid[0],
-                               va.centroid[1] - vb.centroid[1]))
-            if gap_min <= d <= gap_max:
-                key = min(va.range, vb.range)  # prefer the nearest pair
-                if best_key is None or key < best_key:
-                    best_key, best = key, (va, vb)
-    return best

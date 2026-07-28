@@ -5,18 +5,18 @@
 scan_cluster_node:
   ros__parameters:
     scan_topic: "/scan"
-    marker_topic: "/perception/clusters_viz"
 
     # ROI = the pass-count DETECTION ZONE. A car counts as "in the zone"
-    # while a car-sized cluster sits inside this box. For the drive-past
-    # mission, set it to the small strip on the lidar's LEFT within ~1 m so
-    # each passing car fills then clears it: y in [0, 1.0] (left, within 1 m
-    # laterally), x in a modest forward/back window. Left wide-open here as a
-    # starting point -- narrow it to the left strip on the real vehicle.
-    roi_x_min: -12.0
-    roi_x_max: 12.0
-    roi_y_min: -12.0
-    roi_y_max: 12.0
+    # while a car-sized cluster sits inside this box, so it MUST be a small
+    # strip that's EMPTY when no car is passing -- otherwise a wall
+    # permanently occupies it and the count never advances (that was the
+    # "pass_count stuck at 0" bug: the ROI was left wide-open). Default: the
+    # lidar's left within ~1 m (y in [0, 1.0]) and a modest fore/aft window.
+    # Adjust to where cars actually pass on the real vehicle's mounting.
+    roi_x_min: -1.5
+    roi_x_max: 1.5
+    roi_y_min: 0.0
+    roi_y_max: 1.0
 
     # Safe-distance cutoff (m): ignore anything closer than this. The lidar
     # is rear-mounted (near the plate) so the vehicle's own body sits a few
