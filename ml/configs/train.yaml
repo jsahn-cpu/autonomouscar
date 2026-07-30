@@ -15,8 +15,9 @@ image_size: [288, 512]  # [H, W] -- downsized from the source 1080x1920.
 # of each frame before resizing (an ROI-restriction idea considered and
 # shelved for now -- full frame it is). Defaults to 1.0 (no crop) if unset.
 
-num_classes: 4  # background + solid_line/dashed_line/lane_area
-                 # -- must match labeling.yaml's class_ids (3 classes + bg)
+num_classes: 4  # background(0) + left_solid(1) + center_dashed(2) + right_solid(3)
+                 # -- classes come from label/lane_dataset masks (SSE polygons via
+                 # label/polygons_to_masks.py), NOT the old SAM3 labeling.yaml scheme.
 
 batch_size: 64  # raised from 12 (which was sized for a 4GB laptop GPU) --
                   # this model is only ~1.6M params, a 3090's 24GB has huge
@@ -53,7 +54,8 @@ dice_weight: 0.5   # and inside val_criterion, which is always plain
                      # for cross-run comparability)
 
 # Optional per-class weight for the cross-entropy term, index-matched to
-# class_ids (0=background, 1=solid, 2=dashed, 3=lane_area). Left unset
+# the mask classes (0=background, 1=left_solid, 2=center_dashed, 3=right_solid).
+# Left unset
 # (null) to start -- background dominates pixel count but Dice already
 # counterweights that; only add this if a specific class (e.g. the thin
 # dashed line) is visibly underperforming in val snapshots/per-class IoU.
