@@ -13,7 +13,7 @@
 camera_front_node:
   ros__parameters:
     camera_name: "front"
-    device: "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6.3:1.0-video-index0"  # C920, confirmed 2026-07-30 (road view = front): faces the track
+    device: "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:1:1.0-video-index0"  # C920, confirmed 2026-07-30 (road view = front, port 1): faces the track
     frame_id: "camera_front_optical_frame"
     publish_rate_hz: 30.0
     image_width: 1920
@@ -28,6 +28,9 @@ camera_rear_node:
     device: "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6.2:1.0-video-index0"  # C920, confirmed 2026-07-30 (port 6.2): rear-facing
     frame_id: "camera_rear_optical_frame"
     publish_rate_hz: 30.0
-    image_width: 1920
-    image_height: 1080
+    # 720p: 두 C920를 같은 USB 컨트롤러에서 동시에 1080p로 물리면 대역폭 예약 충돌로
+    # 후방이 read-fail 난다 (전방만 켜면 정상). 후방을 720p로 낮춰 대역폭을 맞춤 --
+    # 주차 차량 검출엔 720p로 충분. 후방도 1080p가 필요하면 다른 USB 컨트롤러(포트)로 분리.
+    image_width: 1280
+    image_height: 720
     camera_info_file: ""    # TODO: rear camera calibration file, once captured/computed

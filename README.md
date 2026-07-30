@@ -228,11 +228,23 @@ STOP         전부 정지
 ### 수동 조작 (키보드 텔레옵)
 
 > `arduino_bridge_node`와 **동시에 실행 금지** — 같은 시리얼 포트를 두 노드가 열면 충돌.
+> **Arduino IDE의 Serial Monitor도 닫을 것** — 켜져 있으면 `/dev/ttyACM0`을 점유해
+> 텔레옵이 포트를 못 연다 (`fuser /dev/ttyACM0`로 점유 프로세스 확인 가능).
+> 아두이노에 `mega_steer_closed_loop.ino`가 플래시돼 있어야 함.
 
 ```bash
+cd ~/autodrive_ws   # 상대경로라 반드시 워크스페이스 루트에서 실행
 ros2 run autodrive_vehicle keyboard_teleop_node --ros-args \
   --params-file install/autodrive_bringup/share/autodrive_bringup/config/vehicle.yaml
 ```
+
+성공 시 로그: `keyboard_teleop_node started (closed-loop steering)`.
+
+**`Failed to open Arduino serial port ""` (빈 포트)로 뜨면** params-file이 안 실린 것:
+- `--params-file` 은 붙임표 **2개**, `--ros-args` **뒤에** 와야 함
+- 반드시 **`~/autodrive_ws`에서 실행** (상대경로 `install/...`)
+- 급하면 포트만 직접: `... --ros-args -p serial_port:=/dev/ttyACM0`
+  (단 조향 캘리 파라미터는 안 실려 기본값 사용 → params-file 방식 권장)
 
 키: `g` arm/disarm · `w`/`s` 스로틀 ± · `a`/`d` 조향 좌/우(held 목표) · `f` 중앙 ·
 `k` CAL · `x` 정지(disarm+릴리스) · `Ctrl+C` 종료.
