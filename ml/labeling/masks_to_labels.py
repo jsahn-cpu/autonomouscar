@@ -319,79 +319,64 @@ def process_one_frame(frame_dir: pathlib.Path, params: dict) -> Optional[Tuple[s
 
     # ROI top crop is folded into the load (see load_prompt_instances) so
     # there's no separate full-frame copy per instance.
-    solid = load_prompt_instances(frame_dir, prompts["solid_line"], class_min_score["solid_line"], roi_top_ratio)
+    # dashed-only: solid_line / lane_area 처리 전부 주석 (점선만 검출).
+    # labeling.yaml에서 그 프롬프트/클래스 키를 주석 처리했으므로, 그 키를 참조하는
+    # 아래 코드도 반드시 같이 꺼야 KeyError가 안 난다.
+    # solid = load_prompt_instances(frame_dir, prompts["solid_line"], class_min_score["solid_line"], roi_top_ratio)
     dashed = load_prompt_instances(frame_dir, prompts["dashed_line"], class_min_score["dashed_line"], roi_top_ratio)
-    area = load_prompt_instances(frame_dir, prompts["lane_area"], class_min_score["lane_area"], roi_top_ratio)
+    # area = load_prompt_instances(frame_dir, prompts["lane_area"], class_min_score["lane_area"], roi_top_ratio)
 
-    solid = [(m, s) for m, s in solid if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
+    # solid = [(m, s) for m, s in solid if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
     dashed = [(m, s) for m, s in dashed if passes_line_shape_filter(m, line_min_aspect_ratio, line_min_length_px)]
-    area = [(m, s) for m, s in area if passes_area_filter(m, lane_area_min_area_px)]
+    # area = [(m, s) for m, s in area if passes_area_filter(m, lane_area_min_area_px)]
 
-    solid = dedup_by_iou(solid, iou_dedup_threshold)
+    # solid = dedup_by_iou(solid, iou_dedup_threshold)
     dashed = dedup_by_iou(dashed, iou_dedup_threshold)
-    area = dedup_by_iou(area, iou_dedup_threshold)
+    # area = dedup_by_iou(area, iou_dedup_threshold)
 
     is_empty = False
-    if not (solid or dashed or area):
+    if not dashed:
         is_empty = True
         shape = any_mask_shape(frame_dir)
         if shape is None:
             return None  # nothing to write, shape unknown -- caller counts as skipped
         label = np.zeros(shape, dtype=np.uint8)
     else:
-        shape = (solid or dashed or area)[0][0].shape
+        shape = dashed[0][0].shape
         h, w = shape
-        solid_merged = merge_masks(solid, shape)
+        # solid_merged = merge_masks(solid, shape)
         dashed_merged = merge_masks(dashed, shape)
-        area_merged = merge_masks(area, shape)
+        # area_merged = merge_masks(area, shape)
 
-        # The solid label is simply ALL solid pixels (one class, no left/right
-        # split). The lane_area is the region BETWEEN the two solid lines,
-        # filled geometrically so it doesn't depend on SAM3 detecting the road
-        # surface (only ~39% of frames). To find "the two solid lines" we
-        # still split the solid pixels by the dashed divider internally and
-        # fit a curve to each side (which also bridges each side's
-        # fragmentation) -- we just don't label the sides separately.
-        solid_line = solid_merged if solid_merged.any() else None
+        # dashed-only: 아래 solid 라벨링 + lane_area 기하 합성(split/fill)은 전부 주석.
+        # solid_line = solid_merged if solid_merged.any() else None
         dashed_line = dashed_merged if dashed_merged.any() else None
 
-        dashed_boundary = fit_dashed_boundary(dashed_merged & ~solid_merged)
-        lane_area = None
-        if dashed_boundary is not None:
-            ys = np.arange(h)
-            divider_col = dashed_boundary(ys)
-            col_idx = np.broadcast_to(np.arange(w), (h, w))
-            left_of_div = col_idx < divider_col[:, None]
+        # dashed_boundary = fit_dashed_boundary(dashed_merged & ~solid_merged)
+        # lane_area = None
+        # if dashed_boundary is not None:
+        #     ys = np.arange(h)
+        #     divider_col = dashed_boundary(ys)
+        #     col_idx = np.broadcast_to(np.arange(w), (h, w))
+        #     left_of_div = col_idx < divider_col[:, None]
+        #     left_curve = fit_dashed_boundary(solid_merged & left_of_div)
+        #     right_curve = fit_dashed_boundary(solid_merged & ~left_of_div)
+        #     area_left, area_right = per_row_edges(area_merged)
+        #     left_col = left_curve(ys) if left_curve is not None else area_left
+        #     right_col = right_curve(ys) if right_curve is not None else area_right
+        #     row_valid = ys >= dashed_boundary.y_min
+        #     lane_area = fill_between(left_col, right_col, shape, row_valid)
+        # elif area_merged.any():
+        #     lane_area = area_merged
 
-            left_curve = fit_dashed_boundary(solid_merged & left_of_div)
-            right_curve = fit_dashed_boundary(solid_merged & ~left_of_div)
-            # Where a solid line wasn't detected on a side, fall back to the
-            # asphalt region's own per-row edge (hybrid); with no asphalt
-            # either, that side stays undefined and the fill is skipped there.
-            area_left, area_right = per_row_edges(area_merged)
-            left_col = left_curve(ys) if left_curve is not None else area_left
-            right_col = right_curve(ys) if right_curve is not None else area_right
-            # Vertical extent capped at the divider's top row (above = past
-            # the vanishing point); clamped curves hold flat into the near
-            # field below their data.
-            row_valid = ys >= dashed_boundary.y_min
-            lane_area = fill_between(left_col, right_col, shape, row_valid)
-        elif area_merged.any():
-            # No dashed divider to build geometry on -> just use the asphalt
-            # detection as-is for the lane area (no split).
-            lane_area = area_merged
-
-        # Order: area first, then dashed, then solid on top -- lines beat the
-        # area at overlaps, and solid beats dashed (SAM3's dashed prompt was
-        # observed to weakly fire on solid-line pixels; painting solid last
-        # keeps the true solid label).
+        # dashed만 라벨에 씀 (class_ids["dashed_line"] = 2). lane_area/solid 주석.
         label = np.zeros(shape, dtype=np.uint8)
-        if lane_area is not None:
-            label[lane_area] = class_ids["lane_area"]
+        # if lane_area is not None:
+        #     label[lane_area] = class_ids["lane_area"]
         if dashed_line is not None:
             label[dashed_line] = class_ids["dashed_line"]
-        if solid_line is not None:
-            label[solid_line] = class_ids["solid_line"]
+        # if solid_line is not None:
+        #     label[solid_line] = class_ids["solid_line"]
         if not label.any():
             is_empty = True
 

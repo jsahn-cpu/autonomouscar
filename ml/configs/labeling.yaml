@@ -8,9 +8,10 @@
 # much more reliable than hoping a text prompt encodes spatial position.
 
 prompts:
-  solid_line: "white solid lane line"   # -> class 1 (all solid pixels, no left/right split)
+  # dashed-only: 점선만 검출해서 진행 (solid_line/lane_area 주석 처리)
+  # solid_line: "white solid lane line"   # -> class 1 (all solid pixels, no left/right split)
   dashed_line: "white dashed lane line" # -> class 2
-  lane_area: "asphalt road lane"        # -> class 3 (region between the solid lines, not split)
+  # lane_area: "asphalt road lane"        # -> class 3 (region between the solid lines, not split)
 
 # Class index written into the single-channel label PNG (0 = background).
 # Deliberately simple -- 3 foreground classes, no left/right or lane-1/lane-2
@@ -20,9 +21,9 @@ prompts:
 # distinction. Lines are layered on top of the area at overlaps (see
 # masks_to_labels.py).
 class_ids:
-  solid_line: 1
+  # solid_line: 1
   dashed_line: 2
-  lane_area: 3
+  # lane_area: 3
 
 # label_with_sam3.py's SAM3-side capture floor (an instance scoring below
 # this is never even saved, regardless of prompt) -- must be <= the lowest
@@ -53,9 +54,9 @@ capture_threshold: 0.15
 # eyeball the result -- lower thresholds trade recall for more false
 # positives (esp. solid vs. parking lines).
 class_min_score:
-  solid_line: 0.25
+  # solid_line: 0.25
   dashed_line: 0.20
-  lane_area: 0.15
+  # lane_area: 0.15
 
 # masks_to_labels.py only: drop mask pixels above this row fraction
 # (ceiling/walls -- never floor).
