@@ -230,7 +230,8 @@ STOP         전부 정지
 > `arduino_bridge_node`와 **동시에 실행 금지** — 같은 시리얼 포트를 두 노드가 열면 충돌.
 > **Arduino IDE의 Serial Monitor도 닫을 것** — 켜져 있으면 `/dev/ttyACM0`을 점유해
 > 텔레옵이 포트를 못 연다 (`fuser /dev/ttyACM0`로 점유 프로세스 확인 가능).
-> 아두이노에 `mega_steer_closed_loop.ino`가 플래시돼 있어야 함.
+> **펄스 방식으로 복귀 중**(가변저항 파손) — 아두이노에 `mega_motor_controller.ino`
+> (open-loop 펄스)가 플래시돼 있어야 함. 새 pot 달면 `mega_steer_closed_loop.ino`로 복귀.
 
 ```bash
 cd ~/autodrive_ws   # 상대경로라 반드시 워크스페이스 루트에서 실행
@@ -246,8 +247,8 @@ ros2 run autodrive_vehicle keyboard_teleop_node --ros-args \
 - 급하면 포트만 직접: `... --ros-args -p serial_port:=/dev/ttyACM0`
   (단 조향 캘리 파라미터는 안 실려 기본값 사용 → params-file 방식 권장)
 
-키: `g` arm/disarm · `w`/`s` 스로틀 ± · `a`/`d` 조향 좌/우(held 목표) · `f` 중앙 ·
-`k` CAL · `x` 정지(disarm+릴리스) · `Ctrl+C` 종료.
+키(펄스): `g` arm/disarm · `w`/`s` 스로틀 ± · `a`/`d` 조향 좌/우 **1펄스** ·
+`c` 조향 소프트추정 리셋(SC) · `x` 정지(disarm) · `Ctrl+C` 종료.
 
 ### 라이다 클러스터 (주차 차량 검출 + RViz)
 
