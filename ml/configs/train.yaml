@@ -19,13 +19,17 @@ num_classes: 4  # background(0) + left_solid(1) + center_dashed(2) + right_solid
                  # -- classes come from label/lane_dataset masks (SSE polygons via
                  # label/polygons_to_masks.py), NOT the old SAM3 labeling.yaml scheme.
 
-batch_size: 64  # raised from 12 (which was sized for a 4GB laptop GPU) --
+batch_size: 8   # ⚠ lane_dataset has only 80 train imgs: with drop_last, batch 64
+                #   gave floor(80/64)=1 batch/epoch = ~60 total steps -> model never
+                #   learned (val IoU ~0.005). batch 8 -> 10 batches/epoch. Raise back
+                #   toward 32-64 only once the dataset is large again.
+# (was 64) raised from 12 (which was sized for a 4GB laptop GPU) --
                   # this model is only ~1.6M params, a 3090's 24GB has huge
                   # headroom at 288x512. If this OOMs, back off in steps
                   # (48/32/24); if GPU util (nvidia-smi -l 1 while training)
                   # still isn't near 100%, the bottleneck is data loading,
                   # not batch size -- see num_workers below instead.
-epochs: 60
+epochs: 120  # small dataset -> few steps/epoch, so more epochs (was 60)
 lr: 0.001
 weight_decay: 0.0001
 
