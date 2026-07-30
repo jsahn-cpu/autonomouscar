@@ -24,6 +24,8 @@ setup(
             'local_map_node = autodrive_perception.nodes.local_map_node:main',
             'lane_detector_node = autodrive_perception.nodes.lane_detector_node:main',
             'scan_cluster_node = autodrive_perception.nodes.scan_cluster_node:main',
+            'lane_seg_node = autodrive_perception.nodes.lane_seg_node:main',
+            'lane_curve_node = autodrive_perception.nodes.lane_curve_node:main',
         ],
     },
 )
