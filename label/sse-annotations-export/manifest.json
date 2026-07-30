@@ -1,0 +1,242 @@
+[
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000320_1785181747362266578.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000320_1785181747362266578.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000352_1785181749498655319.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000352_1785181749498655319.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000384_1785181751646078325.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000384_1785181751646078325.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000416_1785181754025575221.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000416_1785181754025575221.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000448_1785181756358485210.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000448_1785181756358485210.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000480_1785181758993221816.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000480_1785181758993221816.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000512_1785181761687533721.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000512_1785181761687533721.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000544_1785181764519550876.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000544_1785181764519550876.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000576_1785181767416117524.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000576_1785181767416117524.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000608_1785181770721500447.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000608_1785181770721500447.json",
+    "object_count": 1
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000640_1785181774209813955.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000640_1785181774209813955.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000672_1785181777951507564.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000672_1785181777951507564.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000704_1785181781778614118.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000704_1785181781778614118.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000736_1785181785631896518.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000736_1785181785631896518.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000768_1785181789344335564.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000768_1785181789344335564.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000800_1785181792900604480.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000800_1785181792900604480.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000832_1785181796605369738.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000832_1785181796605369738.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000864_1785181800410942404.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000864_1785181800410942404.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000896_1785181803974964449.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000896_1785181803974964449.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000928_1785181807560134320.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000928_1785181807560134320.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000960_1785181810996133663.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000960_1785181810996133663.json",
+    "object_count": 4
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_000992_1785181814374448474.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_000992_1785181814374448474.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001024_1785181817776436576.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001024_1785181817776436576.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001056_1785181821219386651.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001056_1785181821219386651.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001088_1785181824693052453.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001088_1785181824693052453.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001120_1785181828226430685.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001120_1785181828226430685.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001152_1785181831706415993.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001152_1785181831706415993.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001184_1785181835071812669.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001184_1785181835071812669.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001216_1785181838441604853.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001216_1785181838441604853.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001248_1785181841857855096.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001248_1785181841857855096.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001280_1785181845372594157.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001280_1785181845372594157.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001312_1785181849036438481.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001312_1785181849036438481.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_48_35_001344_1785181852759016372.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_48_35_001344_1785181852759016372.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000000_1785182000957259925.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000000_1785182000957259925.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000032_1785182003091243061.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000032_1785182003091243061.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000064_1785182005231844785.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000064_1785182005231844785.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000096_1785182007369007740.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000096_1785182007369007740.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000128_1785182009510425910.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000128_1785182009510425910.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000160_1785182011650102315.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000160_1785182011650102315.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000192_1785182013785635830.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000192_1785182013785635830.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000224_1785182015927598250.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000224_1785182015927598250.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000256_1785182018063771012.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000256_1785182018063771012.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000288_1785182020200838363.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000288_1785182020200838363.json",
+    "object_count": 2
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000320_1785182022331194563.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000320_1785182022331194563.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000352_1785182024470916137.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000352_1785182024470916137.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000384_1785182026602872972.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000384_1785182026602872972.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000832_1785182063889617066.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000832_1785182063889617066.json",
+    "object_count": 3
+  },
+  {
+    "image": "rosbag2_2026_07_28-04_53_17_000800_1785182061756837068.png",
+    "annotation": "annotations/rosbag2_2026_07_28-04_53_17_000800_1785182061756837068.json",
+    "object_count": 3
+  }
+]
