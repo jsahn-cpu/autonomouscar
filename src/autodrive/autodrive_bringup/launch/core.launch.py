@@ -40,9 +40,9 @@ def generate_launch_description() -> LaunchDescription:
     camera_rear_node = Node(
         package='autodrive_sensors', executable='camera_node',
         name='camera_rear_node', output='screen', parameters=[camera_params])
-    steering_feedback_node = Node(
-        package='autodrive_sensors', executable='steering_feedback_node',
-        name='steering_feedback_node', output='screen')
+    # steering_feedback_node removed: /vehicle/steering_feedback is now
+    # published by the Arduino serial port owner (arduino_bridge_node), since
+    # only one node may hold that port (see the node's deprecation docstring).
     arduino_sensor_node = Node(
         package='autodrive_sensors', executable='arduino_sensor_node',
         name='arduino_sensor_node', output='screen')
@@ -64,7 +64,6 @@ def generate_launch_description() -> LaunchDescription:
         description_launch,
         camera_front_node,
         camera_rear_node,
-        steering_feedback_node,
         arduino_sensor_node,
         perception_launch,
         localization_launch,

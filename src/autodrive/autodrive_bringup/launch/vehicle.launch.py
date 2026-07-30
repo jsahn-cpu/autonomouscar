@@ -1,4 +1,8 @@
-"""Bring up the vehicle interface stack (Arduino bridge + steering PID)."""
+"""Bring up the vehicle interface stack (Arduino bridge).
+
+Steering is closed-loop in the firmware now, so arduino_bridge_node sends the
+target angle directly -- the old host-side steering_pid_node is deprecated and
+no longer launched (see that node's docstring)."""
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -17,15 +21,7 @@ def generate_launch_description() -> LaunchDescription:
         output='screen',
         parameters=[vehicle_params],
     )
-    steering_pid_node = Node(
-        package='autodrive_vehicle',
-        executable='steering_pid_node',
-        name='steering_pid_node',
-        output='screen',
-        parameters=[vehicle_params],
-    )
 
     return LaunchDescription([
         arduino_bridge_node,
-        steering_pid_node,
     ])

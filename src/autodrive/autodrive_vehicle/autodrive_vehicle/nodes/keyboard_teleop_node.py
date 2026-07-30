@@ -1,46 +1,39 @@
 """Manual keyboard driving -- talks to the Arduino Mega directly over the
 same serial link/protocol as arduino_bridge_node (SerialDriver +
-SerialProtocol), commanding raw PWM instead of going through
-AckermannDriveStamped/the control-safety-vehicle topic chain.
+SerialProtocol), commanding raw drive PWM and a CLOSED-LOOP steering target.
 
-Bypasses that chain on purpose, not just for convenience: every gain
-between physical units (m/s, rad) and PWM is still an unset 0.0 placeholder
-in vehicle.yaml (see arduino_bridge_node.py/steering_pid_node.py's TODOs --
-the drive/steering motors haven't been characterized yet), so a command
-expressed in m/s or radians couldn't produce any real motion anyway. Raw
-PWM is what the firmware actually understands, and driving it directly is
-also how those gains will eventually get characterized in the first place.
+Steering is now closed-loop (mega_steer_closed_loop.ino): a potentiometer on
+A6 measures the real steering angle and the Arduino holds whatever target it
+was last given. So a/d no longer fire one-shot pulses against a drifting
+software estimate -- they nudge a HELD target ADC that the firmware servos
+to. That also means the "current steering command" is a real, loggable value
+(the target) alongside the measured feedback, which the earlier pulse scheme
+could not provide.
 
-  g : arm/disarm toggle (WASD only affects the vehicle while armed)
-  x : stop -- disarms and zeroes throttle, does NOT quit (press g to
-      resume driving)
+Throttle is still a held raw PWM (see serial_protocol's DriveCommand):
+uncharacterized speed->PWM gains make m/s meaningless, and raw PWM is what
+the firmware understands and how those gains will eventually be measured.
+
+  g : arm/disarm toggle (w/s throttle only affects the vehicle while armed)
+  x : stop -- disarms, zeroes throttle, releases steering (SH); NOT quit
   Ctrl+C : quit (sends STOP and disconnects before exiting)
   w : throttle_pwm += throttle_step   s : throttle_pwm -= throttle_step
-  a : one steer pulse left            d : one steer pulse right
-      (sign confirmed against the real vehicle 2026-07-27)
-  c : reset the Arduino's software steering estimate to 0 (sends SC --
-      use this if steering stops responding after many a/d presses in
-      the same direction; see mega_motor_controller.ino's STEER_EST
-      comment)
+  a : steer target += steer_step (toward LEFT, higher ADC)
+  d : steer target -= steer_step (toward RIGHT, lower ADC)
+      (a=left/d=right holds only if increase_adc_is_left; confirm on vehicle)
+  f : steer to center (SC)
+  k : run steering CAL sweep (auto-measures end-stops into EEPROM)
 
-Throttle and steering are NOT symmetric here, matching serial_protocol's
-actual wire semantics: throttle (`M`) is a held absolute PWM value, safe
-and expected to be re-sent unchanged every tick (see the timer below), so
-w/s adjust a persistent throttle_pwm that's continuously written. Steering
-(`ST`) is a ONE-SHOT timed pulse against the Arduino's internal software
-position estimate -- re-sending an unchanged pulse would double-count a
-movement that never actually repeated (see serial_protocol.py's
-docstring), so a/d each fire exactly one pulse per keypress instead of
-setting a held state.
+Publishes /vehicle/steering_feedback (std_msgs/Float32, radians) from the
+firmware's FB telemetry -- since ONLY ONE node may hold the Arduino serial
+port at a time, the port owner (this node while manually driving) is what
+republishes the measured steering angle, not a separate feedback node.
 
 ONLY ONE node should hold the Arduino serial port at a time -- run this
-INSTEAD OF arduino_bridge_node for manual testing/driving, not alongside
-it (both opening the same port will conflict). Swap back to
-arduino_bridge_node once ready to drive from the autonomous stack again.
+INSTEAD OF arduino_bridge_node for manual testing/driving, not alongside it.
 
-Reads raw keypresses without requiring Enter (termios/tty, POSIX only --
-same technique ROS's own teleop_twist_keyboard uses), on a background
-thread so the main thread can rclpy.spin() normally. Must run in a real
+Reads raw keypresses without requiring Enter (termios/tty, POSIX only) on a
+background thread so the main thread can rclpy.spin(). Must run in a real
 terminal (not piped/redirected stdin).
 """
 import sys
@@ -51,18 +44,20 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import Float32
 
 from autodrive_sensors.drivers.serial_driver import SerialDriver
-from autodrive_vehicle.core.serial_protocol import DriveCommand, SerialProtocol, SteerPulseCommand
+from autodrive_vehicle.core.serial_protocol import DriveCommand, SerialProtocol, SteerAngleCommand
+from autodrive_vehicle.core.steering_pot import SteeringPot
 
 _INSTRUCTIONS = """\r
-keyboard_teleop_node (direct Arduino serial -- see arduino_bridge_node)\r
+keyboard_teleop_node (direct Arduino serial -- CLOSED-LOOP steering)\r
   g : arm/disarm toggle\r
-  x : stop (disarm) -- g to resume\r
+  x : stop (disarm + release steering) -- g to resume\r
   Ctrl+C : quit\r
   w/s : throttle +/- step (held)\r
-  a/d : one steer pulse left/right\r
-  c : reset steering estimate to 0 (SC)\r
+  a/d : steer target toward left/right (held, servo'd by firmware)\r
+  f : steer to center      k : run CAL sweep (measure end-stops)\r
 (terminal is in raw mode -- no need to press Enter)\r
 """
 
@@ -71,25 +66,34 @@ class KeyboardTeleopNode(Node):
     def __init__(self) -> None:
         super().__init__('keyboard_teleop_node')
 
-        # Same parameter names as arduino_bridge_node's serial_port/baudrate
-        # on purpose -- copy the values straight out of vehicle.yaml so this
-        # connects to the same Arduino.
         self.declare_parameter('serial_port', '')
         self.declare_parameter('baudrate', 115200)
         self.declare_parameter('publish_rate_hz', 20.0)
-        self.declare_parameter('throttle_step', 20)          # PWM units per w/s press
-        self.declare_parameter('max_throttle_pwm', 60)         # conservative manual-test ceiling
-        self.declare_parameter('steer_step', 40)               # PWM units per a/d pulse
-        self.declare_parameter('steer_pulse_duration_ms', 150)  # per pulse
+        self.declare_parameter('throttle_step', 20)      # PWM units per w/s press
+        self.declare_parameter('max_throttle_pwm', 60)   # conservative manual-test ceiling
+        self.declare_parameter('steer_step_adc', 25)     # ADC counts per a/d press
+        # Steering-pot calibration (mirror of the Arduino EEPROM / vehicle.yaml)
+        self.declare_parameter('steer_adc_min', 210)
+        self.declare_parameter('steer_adc_max', 710)
+        self.declare_parameter('steer_adc_center', 460)
+        self.declare_parameter('steer_max_angle_rad', 0.35)
+        self.declare_parameter('steer_increase_adc_is_left', True)
 
         serial_port = self.get_parameter('serial_port').get_parameter_value().string_value
         baudrate = self.get_parameter('baudrate').get_parameter_value().integer_value
         publish_rate_hz = self.get_parameter('publish_rate_hz').get_parameter_value().double_value
         self._throttle_step = self.get_parameter('throttle_step').get_parameter_value().integer_value
         self._max_throttle_pwm = self.get_parameter('max_throttle_pwm').get_parameter_value().integer_value
-        self._steer_step = self.get_parameter('steer_step').get_parameter_value().integer_value
-        self._steer_pulse_duration_ms = self.get_parameter(
-            'steer_pulse_duration_ms').get_parameter_value().integer_value
+        self._steer_step = self.get_parameter('steer_step_adc').get_parameter_value().integer_value
+
+        self._pot = SteeringPot(
+            adc_min=self.get_parameter('steer_adc_min').get_parameter_value().integer_value,
+            adc_max=self.get_parameter('steer_adc_max').get_parameter_value().integer_value,
+            adc_center=self.get_parameter('steer_adc_center').get_parameter_value().integer_value,
+            max_angle_rad=self.get_parameter('steer_max_angle_rad').get_parameter_value().double_value,
+            increase_adc_is_left=self.get_parameter(
+                'steer_increase_adc_is_left').get_parameter_value().bool_value,
+        )
 
         self._protocol = SerialProtocol()
         self._driver = SerialDriver(port=serial_port or None, baudrate=baudrate)
@@ -98,33 +102,34 @@ class KeyboardTeleopNode(Node):
                 f'Failed to open Arduino serial port "{serial_port}" -- '
                 'commands will be computed but not sent until it connects.')
 
+        self._feedback_pub = self.create_publisher(Float32, '/vehicle/steering_feedback', 10)
+
         self._lock = threading.Lock()
         self._armed = False
         self._throttle_pwm = 0
+        self._steer_target = self._pot.adc_center  # held closed-loop setpoint
         self._last_ack = ''
 
         period_sec = 1.0 / publish_rate_hz if publish_rate_hz > 0.0 else 0.05
         self._timer = self.create_timer(period_sec, self._on_timer)
 
-        self.get_logger().info('keyboard_teleop_node started')
+        self.get_logger().info('keyboard_teleop_node started (closed-loop steering)')
 
-    def _drain_acks_locked(self) -> None:
-        """Print anything the Arduino wrote back, so it's possible to tell
-        'command reached the firmware but the motor didn't move' (a wiring/
-        power problem) apart from 'command never reached the firmware' (a
-        serial/port problem) -- writes alone can't distinguish those.
-        Dedups identical consecutive OK lines so the throttle ack (sent
-        every timer tick) doesn't spam the terminal; ERR lines always print.
-        Caller must already hold self._lock (see its call sites) -- all
-        self._driver I/O is serialized through that lock since the timer
-        (main thread) and handle_key (key-reading thread) would otherwise
-        touch the same pyserial object concurrently."""
+    def _drain_serial_locked(self) -> None:
+        """Read everything the Arduino wrote: republish FB telemetry as the
+        measured steering angle, and print non-FB replies (deduped OK spam)
+        so firmware events/errors are visible. Caller holds self._lock."""
         while True:
             raw = self._driver.read()
             if raw is None:
                 return
             parsed = self._protocol.decode(raw)
             if parsed is None:
+                continue
+            if parsed.get('fb'):
+                msg = Float32()
+                msg.data = float(self._pot.adc_to_angle(parsed['pot']))
+                self._feedback_pub.publish(msg)
                 continue
             if not parsed['ok'] or parsed['raw'] != self._last_ack:
                 print(f"\r[arduino] {parsed['raw']}\r")
@@ -134,7 +139,7 @@ class KeyboardTeleopNode(Node):
         with self._lock:
             throttle_pwm = self._throttle_pwm if self._armed else 0
             self._driver.write(self._protocol.encode_drive(DriveCommand(throttle_pwm=throttle_pwm)))
-            self._drain_acks_locked()
+            self._drain_serial_locked()
 
     def handle_key(self, key: str) -> None:
         with self._lock:
@@ -148,27 +153,35 @@ class KeyboardTeleopNode(Node):
             if key == 'x':
                 self._armed = False
                 self._throttle_pwm = 0
-                print('\rstopped (disarmed) -- press g to resume, Ctrl+C to quit\r')
+                self._driver.write(self._protocol.encode_steer_hold_off())  # release steering
+                print('\rstopped (disarmed + steering released) -- g to resume\r')
                 return
             if key == 'w':
                 self._throttle_pwm = min(self._throttle_pwm + self._throttle_step, self._max_throttle_pwm)
             elif key == 's':
                 self._throttle_pwm = max(self._throttle_pwm - self._throttle_step, -self._max_throttle_pwm)
             elif key in ('a', 'd'):
-                if not self._armed:
-                    print('\rnot armed -- press g first\r')
-                    return
-                sign = 1 if key == 'a' else -1
-                pulse = SteerPulseCommand(
-                    steer_pwm=sign * self._steer_step, duration_ms=self._steer_pulse_duration_ms)
-                self._driver.write(self._protocol.encode_steer_pulse(pulse))
-                print(f'\rsteer pulse {pulse.steer_pwm} for {pulse.duration_ms}ms\r')
-                self._drain_acks_locked()
+                # a = toward LEFT (higher ADC when increase_adc_is_left), d = right
+                step = self._steer_step if key == 'a' else -self._steer_step
+                if not self._pot.increase_adc_is_left:
+                    step = -step
+                self._steer_target = int(self._pot.clamp_adc(self._steer_target + step))
+                self._driver.write(self._protocol.encode_steer_angle(
+                    SteerAngleCommand(target_adc=self._steer_target)))
+                angle_deg = self._pot.adc_to_angle(self._steer_target) * 57.2958
+                print(f'\rsteer target={self._steer_target} (~{angle_deg:+.1f} deg)\r')
+                self._drain_serial_locked()
                 return
-            elif key == 'c':
-                self._driver.write(self._protocol.encode_center_reset())
-                print('\rsteering estimate reset (SC)\r')
-                self._drain_acks_locked()
+            elif key == 'f':
+                self._steer_target = self._pot.adc_center
+                self._driver.write(self._protocol.encode_steer_center())
+                print('\rsteer -> center\r')
+                self._drain_serial_locked()
+                return
+            elif key == 'k':
+                self._driver.write(self._protocol.encode_calibrate())
+                print('\rCAL sweep started (watch [arduino] SUMMARY)\r')
+                self._drain_serial_locked()
                 return
             else:
                 return
@@ -182,11 +195,9 @@ class KeyboardTeleopNode(Node):
 
 
 def _read_keys_loop(node: KeyboardTeleopNode) -> None:
-    """Runs on a background daemon thread -- blocking single-char reads off
-    stdin in cbreak mode, forwarded to handle_key() for as long as the
-    process lives. Nothing in handle_key ever ends this loop on its own
-    (there is no quit key -- see module docstring); it just dies with the
-    process on Ctrl+C, same as any other daemon thread."""
+    """Background daemon thread: blocking single-char reads in cbreak mode,
+    forwarded to handle_key() for the life of the process (no quit key -- it
+    dies with the process on Ctrl+C)."""
     fd = sys.stdin.fileno()
     original_settings = termios.tcgetattr(fd)
     try:

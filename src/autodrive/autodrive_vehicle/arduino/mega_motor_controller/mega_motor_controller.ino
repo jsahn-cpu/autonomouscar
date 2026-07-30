@@ -1,4 +1,10 @@
 /*
+ * LEGACY / SUPERSEDED (kept as a reference + open-loop fallback):
+ *   The vehicle now runs ../mega_steer_closed_loop/mega_steer_closed_loop.ino,
+ *   which closes the steering loop on a POT (A6) instead of the open-loop
+ *   timed ST pulses below. Flash the closed-loop sketch for normal use; this
+ *   one is only here in case you need to fall back to no-sensor open-loop.
+ *
  * autodrive_ws - Arduino Mega Motor Controller
  * Board: Arduino Mega 2560
  * Motor driver model(s): DRI0042 x3 (confirmed -- same driver boards/pin

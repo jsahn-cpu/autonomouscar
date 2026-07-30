@@ -1,10 +1,15 @@
-# Placeholder parameters for autodrive_vehicle.
-# TODO: confirm the real serial port and baud rate before deploying.
+# Parameters for autodrive_vehicle.
 #
-# steer_pulse_duration_ms is duplicated between the two node sections below
-# on purpose -- /vehicle/steering_pwm (std_msgs/Float32) only carries a PWM
-# value, not a duration, so both nodes read the same config value instead of
-# a custom message type. Keep them equal if you change one.
+# Steering is CLOSED-LOOP in the firmware now (mega_steer_closed_loop.ino,
+# POT on A6). The host sends a target angle; the firmware servos to it. The
+# steer_* calibration below MIRRORS the Arduino's EEPROM calibration (from
+# its CAL sweep) so the ROS side can map angle <-> ADC the same way:
+#   adc_min/adc_max : mechanical end-stops (CAL after pot swap: 136 .. 867)
+#   adc_center      : POT reading with wheels straight (~501, CAL midpoint)
+#   max_angle_rad   : end-stop steering angle (user estimate ~20 deg = 0.35 rad,
+#                     approximate -- tune if a better number is found)
+#   increase_adc_is_left : higher ADC == left (measured: yes)
+# Keep these in sync with the Arduino EEPROM after any CAL.
 arduino_bridge_node:
   ros__parameters:
     serial_port: "/dev/ttyACM0"    # confirmed on the actual vehicle 2026-07-27
@@ -12,37 +17,30 @@ arduino_bridge_node:
     speed_to_pwm_gain: 0.0   # TODO: (m/s) -> throttle PWM, until the drive
                               # motor is characterized against real speed
     max_throttle_pwm: 0      # TODO: safe drive PWM ceiling, once known
-    steer_pulse_duration_ms: 0  # TODO: must match steering_pid_node below
+    steer_adc_min: 136
+    steer_adc_max: 867
+    steer_adc_center: 501
+    steer_max_angle_rad: 0.35
+    steer_increase_adc_is_left: true
 
-steering_pid_node:
-  ros__parameters:
-    # TODO: unused until a real steering feedback sensor is installed --
-    # see steering_pid_node.py. Tune once the sensor exists.
-    kp: 0.0
-    ki: 0.0
-    kd: 0.0
-    # Open-loop angle -> steering pulse mapping used until then.
-    angle_to_pwm_gain: 0.0   # TODO: (rad) -> steer PWM, once motor is characterized
-    max_steer_pwm: 0         # TODO: safe steering PWM ceiling, once known
-    steer_pulse_duration_ms: 0  # TODO: must match arduino_bridge_node above
+# steering_pid_node is DEPRECATED (loop moved into the firmware) and no longer
+# launched -- see steering_pid_node.py. Its old kp/ki/kd/angle_to_pwm_gain
+# params are gone.
 
-# Manual driving -- talks to the Arduino directly (raw PWM, no gain
-# characterization needed), see keyboard_teleop_node.py's module docstring
-# for why this bypasses arduino_bridge_node's topic chain instead of going
-# through it. Run this INSTEAD OF arduino_bridge_node, never alongside it
-# (both would fight over the same serial port) -- copy serial_port from
-# arduino_bridge_node above once it's filled in.
+# Manual driving -- talks to the Arduino directly, see keyboard_teleop_node.py.
+# Run this INSTEAD OF arduino_bridge_node, never alongside it (both would fight
+# over the same serial port). a/d now nudge a HELD closed-loop steering target
+# (ADC) that the firmware servos to, not one-shot pulses.
 keyboard_teleop_node:
   ros__parameters:
     serial_port: "/dev/ttyACM0"    # same value as arduino_bridge_node.serial_port above
     baudrate: 115200
     throttle_step: 20        # PWM units per w/s press
-    max_throttle_pwm: 120     # manual-drive ceiling (firmware MAX_DRIVE_PWM is
-                                # 180, so still headroom). Low PWM (<=60) wasn't
-                                # enough to overcome the drivetrain's static
-                                # friction -- same issue steering hit.
-    steer_step: 150           # PWM units per a/d pulse -- 40 was too weak to
-                                # move the steering motor at all in testing,
-                                # raised well past 100 (firmware ceiling is
-                                # now 255, see mega_motor_controller.ino)
-    steer_pulse_duration_ms: 250  # firmware's MAX_STEER_DURATION_MS ceiling
+    max_throttle_pwm: 120     # manual-drive ceiling (firmware MAX_DRIVE_PWM is 180)
+    steer_step_adc: 25        # POT counts per a/d press (span is ~500: 210..710)
+    # Steering-pot calibration -- mirror of the Arduino EEPROM (see header).
+    steer_adc_min: 136
+    steer_adc_max: 867
+    steer_adc_center: 501
+    steer_max_angle_rad: 0.35
+    steer_increase_adc_is_left: true

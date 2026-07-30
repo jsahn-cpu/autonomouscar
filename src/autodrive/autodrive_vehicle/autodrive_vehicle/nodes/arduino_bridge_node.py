@@ -1,18 +1,21 @@
 """ROS2 node bridging vehicle commands to the Arduino Mega over serial.
 
-This is the ONLY node allowed to talk to the Arduino for driving commands.
-It subscribes to /safety/command (throttle) and /vehicle/steering_pwm
-(steering, computed open-loop by steering_pid_node until a real steering
-feedback sensor exists -- see that node's docstring). It must never
-subscribe to /control/command directly, so that autodrive_safety remains the
-single arbiter/watchdog gate in front of the actuators.
+This is the ONLY node allowed to talk to the Arduino for driving commands in
+the autonomous stack. It subscribes to /safety/command (throttle + steering
+angle) so autodrive_safety stays the single arbiter/watchdog gate in front of
+the actuators -- it must never subscribe to /control/command directly.
 
-Drive and steering are sent as independent serial commands as soon as their
-respective topic updates, not bundled into one write -- see
-autodrive_vehicle.core.serial_protocol for why re-sending an unchanged
-steering pulse alongside every throttle update would be wrong (it would
-double-count the Arduino's software position estimate for a pulse that
-never actually repeated).
+Steering is CLOSED-LOOP in the firmware now (mega_steer_closed_loop.ino, POT
+on A6): this node maps the desired steering ANGLE (rad, from LQR via safety)
+to a target POT reading with SteeringPot and sends it as `SA`. It no longer
+receives a pre-computed steering PWM -- steering_pid_node / the /vehicle/
+steering_pwm topic are obsolete (the loop moved into the firmware).
+
+Because ONLY ONE node may hold the Arduino serial port, this node -- the port
+owner while the autonomous stack drives -- is also what reads the firmware's
+FB telemetry and republishes the measured steering angle on
+/vehicle/steering_feedback (the old standalone steering_feedback_node can't
+open the same port and is deprecated).
 """
 from typing import Optional
 
@@ -22,11 +25,12 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from std_msgs.msg import Float32
 
 from autodrive_sensors.drivers.serial_driver import SerialDriver
-from autodrive_vehicle.core.serial_protocol import DriveCommand, SerialProtocol, SteerPulseCommand
+from autodrive_vehicle.core.serial_protocol import DriveCommand, SerialProtocol, SteerAngleCommand
+from autodrive_vehicle.core.steering_pot import SteeringPot
 
 
 class ArduinoBridgeNode(Node):
-    """Subscribes to /safety/command + /vehicle/steering_pwm, writes to the Arduino Mega."""
+    """Subscribes to /safety/command, writes drive + closed-loop steering to the Arduino."""
 
     def __init__(self) -> None:
         super().__init__('arduino_bridge_node')
@@ -35,10 +39,12 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('baudrate', 115200)
         self.declare_parameter('speed_to_pwm_gain', 0.0)
         self.declare_parameter('max_throttle_pwm', 0)
-        # Must match steering_pid_node's value -- see module docstring on
-        # why the pulse duration isn't carried on /vehicle/steering_pwm
-        # itself.
-        self.declare_parameter('steer_pulse_duration_ms', 0)
+        # Steering-pot calibration (mirror of the Arduino EEPROM / vehicle.yaml)
+        self.declare_parameter('steer_adc_min', 210)
+        self.declare_parameter('steer_adc_max', 710)
+        self.declare_parameter('steer_adc_center', 460)
+        self.declare_parameter('steer_max_angle_rad', 0.35)
+        self.declare_parameter('steer_increase_adc_is_left', True)
 
         self._serial_port: str = self.get_parameter('serial_port').get_parameter_value().string_value
         self._baudrate: int = self.get_parameter('baudrate').get_parameter_value().integer_value
@@ -46,8 +52,15 @@ class ArduinoBridgeNode(Node):
             'speed_to_pwm_gain').get_parameter_value().double_value
         self._max_throttle_pwm: int = self.get_parameter(
             'max_throttle_pwm').get_parameter_value().integer_value
-        self._steer_pulse_duration_ms: int = self.get_parameter(
-            'steer_pulse_duration_ms').get_parameter_value().integer_value
+
+        self._pot = SteeringPot(
+            adc_min=self.get_parameter('steer_adc_min').get_parameter_value().integer_value,
+            adc_max=self.get_parameter('steer_adc_max').get_parameter_value().integer_value,
+            adc_center=self.get_parameter('steer_adc_center').get_parameter_value().integer_value,
+            max_angle_rad=self.get_parameter('steer_max_angle_rad').get_parameter_value().double_value,
+            increase_adc_is_left=self.get_parameter(
+                'steer_increase_adc_is_left').get_parameter_value().bool_value,
+        )
 
         self._protocol = SerialProtocol()
         self._driver = SerialDriver(port=self._serial_port or None, baudrate=self._baudrate)
@@ -58,27 +71,38 @@ class ArduinoBridgeNode(Node):
 
         self._safety_command_sub = self.create_subscription(
             AckermannDriveStamped, '/safety/command', self._on_safety_command, 10)
-        self._steering_pwm_sub = self.create_subscription(
-            Float32, '/vehicle/steering_pwm', self._on_steering_pwm, 10)
+        self._feedback_pub = self.create_publisher(Float32, '/vehicle/steering_feedback', 10)
 
-        self.get_logger().info('arduino_bridge_node started')
+        # Drain the firmware's ~50 Hz FB telemetry and republish measured angle.
+        self._serial_timer = self.create_timer(0.01, self._drain_serial)
+
+        self.get_logger().info('arduino_bridge_node started (closed-loop steering)')
 
     def _on_safety_command(self, msg: AckermannDriveStamped) -> None:
-        """Convert speed (m/s) to throttle PWM and write the drive command.
+        """Write the drive command (speed->PWM) and the closed-loop steering
+        target (angle->ADC).
 
         TODO: speed_to_pwm_gain/max_throttle_pwm are placeholders (0) until
         the drive motor is characterized against real speed measurements.
         """
         pwm = msg.drive.speed * self._speed_to_pwm_gain
         pwm = max(-self._max_throttle_pwm, min(self._max_throttle_pwm, pwm))
-        command = DriveCommand(throttle_pwm=int(pwm))
-        self._driver.write(self._protocol.encode_drive(command))
+        self._driver.write(self._protocol.encode_drive(DriveCommand(throttle_pwm=int(pwm))))
 
-    def _on_steering_pwm(self, msg: Float32) -> None:
-        """Write the already-computed steering pulse (see steering_pid_node)."""
-        command = SteerPulseCommand(
-            steer_pwm=int(msg.data), duration_ms=self._steer_pulse_duration_ms)
-        self._driver.write(self._protocol.encode_steer_pulse(command))
+        target_adc = self._pot.angle_to_adc(msg.drive.steering_angle)
+        self._driver.write(self._protocol.encode_steer_angle(SteerAngleCommand(target_adc=target_adc)))
+
+    def _drain_serial(self) -> None:
+        """Republish FB telemetry as the measured steering angle (rad)."""
+        while True:
+            raw = self._driver.read()
+            if raw is None:
+                return
+            parsed = self._protocol.decode(raw)
+            if parsed and parsed.get('fb'):
+                out = Float32()
+                out.data = float(self._pot.adc_to_angle(parsed['pot']))
+                self._feedback_pub.publish(out)
 
     def destroy_node(self) -> bool:
         self._driver.write(self._protocol.encode_stop())
