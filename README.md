@@ -169,7 +169,88 @@ ros2 launch autodrive_bringup core.launch.py
 개별 노드도 `ros2 run <package> <executable>` 형태로 단독 실행할 수 있습니다.
 예: `ros2 run autodrive_sensors camera_node`
 
-## 8. 현재 구현 범위
+## 8. 자주 쓰는 커맨드 모음
+
+`install/setup.bash`는 `~/.bashrc`에서 자동 source 됩니다. 경로는 워크스페이스 루트
+(`~/autodrive_ws`) 기준입니다.
+
+### 빌드
+
+```bash
+colcon build --symlink-install               # 전체
+colcon build --packages-select autodrive_bringup   # 개별 패키지
+```
+
+### 카메라 (전방 = by-path 6.3 도로뷰 / 후방 = 6.2, camera.yaml)
+
+> by-path 경로는 USB 포트 바뀌면 달라짐. 안 열리면 `ls /dev/v4l/by-path/`로 재확인 후
+> `camera.yaml`의 `device:` 갱신.
+
+```bash
+# 전방
+ros2 run autodrive_sensors camera_node --ros-args \
+  --params-file install/autodrive_bringup/share/autodrive_bringup/config/camera.yaml \
+  -r __node:=camera_front_node
+
+# 후방
+ros2 run autodrive_sensors camera_node --ros-args \
+  --params-file install/autodrive_bringup/share/autodrive_bringup/config/camera.yaml \
+  -r __node:=camera_rear_node
+
+# 전방 + 차선검출 한 번에
+ros2 launch autodrive_bringup camera_raw.launch.py
+
+# 확인
+ros2 topic hz /camera/front/image/compressed
+ros2 topic hz /camera/rear/image/compressed
+```
+
+### 조향 (폐루프 펌웨어)
+
+펌웨어 `autodrive_vehicle/arduino/mega_steer_closed_loop/mega_steer_closed_loop.ino`를
+Arduino IDE로 업로드(Mega 2560). 업로드 성공 시 `READY fw=closed-loop-steer v1` 출력.
+Serial Monitor(115200)에서 직접 명령:
+
+```
+CAL          좌/우 끝단 자동 캘리 → min/max/방향부호를 EEPROM 저장 (재부팅해도 유지)
+SA <adc>     조향 목표 위치로 이동·유지. 예: SA 501(중앙) / SA 700 / SA 300
+SC           중앙으로
+SH           조향 릴리스 (모터 off)
+SR <pwm>     [진단] 폐루프 없이 생짜 구동. 예: SR 255 / SR -255
+CFG          현재 캘리 값 출력
+FBON / FBOFF FB 텔레메트리 스트림 on/off (CAL 끝나면 자동 off)
+STOP         전부 정지
+```
+
+현재 CAL 값: `min 136 / max 867 / center 501` (가변저항 교체 후, `vehicle.yaml`과 동기화됨).
+값이 바뀌면 CAL 재실행 후 `vehicle.yaml`의 `steer_adc_*`도 맞춰줄 것.
+
+### 수동 조작 (키보드 텔레옵)
+
+> `arduino_bridge_node`와 **동시에 실행 금지** — 같은 시리얼 포트를 두 노드가 열면 충돌.
+
+```bash
+ros2 run autodrive_vehicle keyboard_teleop_node --ros-args \
+  --params-file install/autodrive_bringup/share/autodrive_bringup/config/vehicle.yaml
+```
+
+키: `g` arm/disarm · `w`/`s` 스로틀 ± · `a`/`d` 조향 좌/우(held 목표) · `f` 중앙 ·
+`k` CAL · `x` 정지(disarm+릴리스) · `Ctrl+C` 종료.
+
+### 라이다 클러스터 (주차 차량 검출 + RViz)
+
+```bash
+ros2 launch autodrive_bringup lidar_cluster.launch.py            # RViz 포함(Fixed Frame=laser 프리셋)
+ros2 launch autodrive_bringup lidar_cluster.launch.py rviz:=false serial_port:=/dev/ttyUSB0
+```
+
+### 전체 스택 (미션 제외)
+
+```bash
+ros2 launch autodrive_bringup core.launch.py
+```
+
+## 9. 현재 구현 범위
 
 - 카메라(전/후방)와 차선 인식/추종 목표 경로 생성(`autodrive_perception`의
   `lane_detector_node`)은 실제로 동작합니다 — `bev_node`/`local_map_node`는
@@ -208,7 +289,7 @@ ros2 launch autodrive_bringup core.launch.py
   ROS 노드에는 통합되지 않은 별도 실험 단계이며, 상세 실행 가이드는
   `ml/README.md` 참고.
 
-## 9. 향후 미션 구현 계획
+## 10. 향후 미션 구현 계획
 
 `autodrive_missions` 패키지 아래에 다음 3개 폴더만 준비되어 있으며,
 각 폴더의 `README.md`에는 `Future implementation`이라고만 적혀 있습니다.

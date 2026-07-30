@@ -13,7 +13,7 @@
 camera_front_node:
   ros__parameters:
     camera_name: "front"
-    device: "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6:1.0-video-index0"  # C920, confirmed 2026-07-28 (direct-to-laptop port): faces the track
+    device: "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6.3:1.0-video-index0"  # C920, confirmed 2026-07-30 (road view = front): faces the track
     frame_id: "camera_front_optical_frame"
     publish_rate_hz: 30.0
     image_width: 1920
@@ -25,7 +25,7 @@ camera_front_node:
 camera_rear_node:
   ros__parameters:
     camera_name: "rear"
-    device: "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6.3:1.0-video-index0"  # C920, confirmed 2026-07-27: faces away from the track
+    device: "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:6.2:1.0-video-index0"  # C920, confirmed 2026-07-30 (port 6.2): rear-facing
     frame_id: "camera_rear_optical_frame"
     publish_rate_hz: 30.0
     image_width: 1920
